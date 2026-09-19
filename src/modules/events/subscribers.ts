@@ -1,6 +1,7 @@
 import { DOMAIN_EVENTS } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
 import { assignOrder, drainAwaitingAssignment } from "../assignment/engine.js";
+import { registerNotificationSubscribers } from "../notifications/subscribers.js";
 import { register } from "./outbox.js";
 
 /**
@@ -14,6 +15,10 @@ import { register } from "./outbox.js";
  * the event, so a handler that assumes it runs once will run twice.
  */
 export function registerSubscribers(): void {
+  // Telling people what happened lives in its own file, because it is the part that
+  // grows — WhatsApp in Phase 2 joins it and nothing here changes.
+  registerNotificationSubscribers();
+
   register({
     name: "assign",
     events: [DOMAIN_EVENTS.ASSIGNMENT_REQUESTED],

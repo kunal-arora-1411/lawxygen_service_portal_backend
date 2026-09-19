@@ -1,6 +1,7 @@
 import { drainAwaitingAssignment } from "../modules/assignment/engine.js";
 import { escalateOverdueAssignments } from "../modules/assignment/escalation.js";
 import { dispatchPending } from "../modules/events/outbox.js";
+import { retryFailedNotifications } from "../modules/notifications/service.js";
 import { reconcileScheduled } from "../modules/payments/reconciliation.js";
 import { logger } from "../lib/logger.js";
 
@@ -43,6 +44,13 @@ const DRAIN_INTERVAL_MS = 60_000;
  */
 const RECONCILE_INTERVAL_MS = 6 * 60 * 60_000;
 
+/**
+ * A notification send that failed is recorded and swallowed, so a mail provider being
+ * down cannot re-run the assignment engine. This is what picks those back up — without
+ * it the swallow is simply a loss.
+ */
+const NOTIFICATION_RETRY_INTERVAL_MS = 5 * 60_000;
+
 export type StopJobs = () => void;
 
 function every(name: string, ms: number, task: () => Promise<unknown>): NodeJS.Timeout {
@@ -78,6 +86,7 @@ export function startJobs(): StopJobs {
     every("escalation", ESCALATION_INTERVAL_MS, () => escalateOverdueAssignments()),
     every("drain-queue", DRAIN_INTERVAL_MS, () => drainAwaitingAssignment()),
     every("reconcile", RECONCILE_INTERVAL_MS, () => reconcileScheduled()),
+    every("notify-retry", NOTIFICATION_RETRY_INTERVAL_MS, () => retryFailedNotifications()),
   ];
 
   return () => {

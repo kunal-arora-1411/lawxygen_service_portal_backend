@@ -50,6 +50,13 @@
       "when": 1789835022826,
       "tag": "0006_yielding_monster_badoon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789842647981,
+      "tag": "0007_dazzling_silver_samurai",
+      "breakpoints": true
     }
   ]
 }

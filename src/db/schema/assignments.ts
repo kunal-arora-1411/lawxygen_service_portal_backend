@@ -165,6 +165,8 @@ export const DOMAIN_EVENTS = {
   ASSIGNMENT_ESCALATED: "assignment.escalated",
   ASSIGNMENT_REVOKED: "assignment.revoked",
   PROFESSIONAL_APPROVED: "professional.approved",
+  ORDER_REFUNDED: "order.refunded",
+  PAYOUT_RELEASED: "payout.released",
   PROFESSIONAL_AVAILABLE: "professional.availability_changed",
 } as const;
 

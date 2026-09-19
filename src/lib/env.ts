@@ -49,6 +49,12 @@ const schema = z.object({
   SMS_SENDER_ID: z.string().optional(),
   SMS_DLT_TEMPLATE_ID: z.string().optional(),
 
+  // Transactional email. Without these a local environment logs the message and any
+  // other environment refuses to send, rather than silently dropping receipts.
+  MAIL_PROVIDER_KEY: z.string().optional(),
+  /** e.g. `Lawxygen <no-reply@lawxygen.in>`. Must be a verified sender. */
+  MAIL_FROM: z.string().optional(),
+
   // M4 — payouts. RazorpayX is the intended provider; without these, a deployed
   // environment refuses to pay rather than marking payouts paid with no money moved.
   RAZORPAYX_KEY_ID: z.string().optional(),

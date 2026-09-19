@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
+  DOMAIN_EVENTS,
   ledgerLines,
   payoutBatches,
   payoutIdentities,
@@ -15,6 +16,7 @@ import { authorize, type Actor } from "../../lib/auth/policy.js";
 import { nextCounterValue } from "../../lib/counters.js";
 import { logger } from "../../lib/logger.js";
 import { DEFAULT_MONEY_SETTINGS } from "../../lib/money.js";
+import { emit } from "../events/outbox.js";
 import { ACCOUNTS, postEntry } from "../payments/ledger.js";
 import { sendPayout } from "./transfer.js";
 
@@ -239,6 +241,19 @@ export async function releaseBatch(actor: Actor, reference: string): Promise<Rel
           .update(payouts)
           .set({ status: "paid", providerRef: transfer.providerRef, paidAt: new Date() })
           .where(and(eq(payouts.id, payout.id), eq(payouts.status, "pending")));
+
+        // Per payout, not per batch: a partial release must tell the people who were
+        // actually paid, and stay silent to the ones whose transfer failed.
+        await emit(tx, {
+          name: DOMAIN_EVENTS.PAYOUT_RELEASED,
+          aggregateType: "payout",
+          aggregateId: payout.id,
+          payload: {
+            professionalId: payout.professionalId,
+            amountPaise: payout.amountPaise,
+            batchReference: reference,
+          },
+        });
       });
 
       paid += 1;

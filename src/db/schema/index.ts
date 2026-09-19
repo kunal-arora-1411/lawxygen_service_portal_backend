@@ -7,3 +7,4 @@ export * from "./payments.js";
 export * from "./professionals.js";
 export * from "./assignments.js";
 export * from "./payouts.js";
+export * from "./notifications.js";

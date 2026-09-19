@@ -1,11 +1,12 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { assignments, orders, payments } from "../../db/schema/index.js";
+import { assignments, DOMAIN_EVENTS, orders, payments } from "../../db/schema/index.js";
 import { ApiError } from "../../lib/api.js";
 import { recordAudit } from "../../lib/auth/audit.js";
 import { authorize, type Actor } from "../../lib/auth/policy.js";
 import { logger } from "../../lib/logger.js";
 import { deriveAmounts } from "../../lib/money.js";
+import { emit } from "../events/outbox.js";
 import { ACCOUNTS, postEntry } from "./ledger.js";
 import { sendRefund } from "./razorpay.js";
 
@@ -172,6 +173,16 @@ export async function refundOrder(
         .set({ status: "revoked", closedReason: `Order refunded: ${reason}` })
         .where(and(eq(assignments.orderId, order.id), inArray(assignments.status, HOLDING)));
     }
+
+    // Emitted so the client is told. Keyed on the payment rather than the order,
+    // because the order can only be refunded once but the key should say why.
+    await emit(tx, {
+      name: DOMAIN_EVENTS.ORDER_REFUNDED,
+      aggregateType: "order",
+      aggregateId: order.id,
+      payload: { reference, amountPaise: order.pricePaise, reason },
+      dedupeKey: `${DOMAIN_EVENTS.ORDER_REFUNDED}:${providerPaymentId}`,
+    });
 
     await recordAudit(
       {
