@@ -36,6 +36,13 @@
       "when": 1789823596831,
       "tag": "0004_professionals_and_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789833437566,
+      "tag": "0005_payouts",
+      "breakpoints": true
     }
   ]
 }

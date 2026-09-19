@@ -49,6 +49,12 @@ const schema = z.object({
   SMS_SENDER_ID: z.string().optional(),
   SMS_DLT_TEMPLATE_ID: z.string().optional(),
 
+  // M4 — payouts. RazorpayX is the intended provider; without these, a deployed
+  // environment refuses to pay rather than marking payouts paid with no money moved.
+  RAZORPAYX_KEY_ID: z.string().optional(),
+  RAZORPAYX_KEY_SECRET: z.string().optional(),
+  RAZORPAYX_ACCOUNT: z.string().optional(),
+
   // M2 — payments
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),

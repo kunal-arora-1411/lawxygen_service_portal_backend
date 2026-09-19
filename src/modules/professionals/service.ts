@@ -17,6 +17,7 @@ import { recordAudit } from "../../lib/auth/audit.js";
 import { authorize, type Actor } from "../../lib/auth/policy.js";
 import { emit } from "../events/outbox.js";
 import { ACCOUNTS } from "../payments/ledger.js";
+import { payoutHistoryFor, type PayoutHistoryRow } from "../payouts/service.js";
 
 /** A professional's own view of their work. */
 
@@ -372,4 +373,11 @@ export async function earningsFor(actor: Actor): Promise<Earnings> {
     paidPaise: Number(balance?.paid ?? 0),
     matters: { completed: counts?.completed ?? 0, open: counts?.open ?? 0 },
   };
+}
+
+/** A professional's own payout history, resolved from their session. */
+export async function payoutHistory(actor: Actor): Promise<PayoutHistoryRow[]> {
+  authorize(actor, "payout.read.own", { minimumRole: "professional" });
+  const professional = await professionalFor(actor);
+  return payoutHistoryFor(professional.id);
 }

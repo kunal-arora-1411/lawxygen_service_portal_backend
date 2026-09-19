@@ -15,6 +15,7 @@ import {
   updateServiceSchema,
 } from "./schemas.js";
 import { reassignOrder, suspendProfessional, verifyProfessional } from "./service.js";
+import { draftBatch, listBatches, payableBalances, releaseBatch } from "../payouts/service.js";
 
 export function adminRoutes(): Router {
   const router = Router();
@@ -119,6 +120,46 @@ export function adminRoutes(): Router {
       const { reference } = parse(orderReferenceSchema, req.params);
       const { reason } = parse(suspendSchema, req.body);
       return reassignOrder(actorOf(req), reference, reason);
+    }),
+  );
+
+  // ------------------------------------------------------------------ payouts
+
+  router.get(
+    "/payouts/payable",
+    handler((req) => payableBalances(actorOf(req))),
+  );
+
+  router.get(
+    "/payouts",
+    handler((req) => listBatches(actorOf(req))),
+  );
+
+  router.post(
+    "/payouts/draft",
+    handler(async (req) => {
+      const { note } = parse(z.object({ note: z.string().trim().max(200).optional() }), req.body);
+      return draftBatch(actorOf(req), note);
+    }, 201),
+  );
+
+  /**
+   * The one action that sends money out of the business. Separate from drafting on
+   * purpose, and refused outright while impersonating.
+   */
+  router.post(
+    "/payouts/:reference/release",
+    handler(async (req) => {
+      const { reference } = parse(
+        z.object({
+          reference: z
+            .string()
+            .trim()
+            .regex(/^PO-\d{6,}$/, "Not a batch reference."),
+        }),
+        req.params,
+      );
+      return releaseBatch(actorOf(req), reference);
     }),
   );
 

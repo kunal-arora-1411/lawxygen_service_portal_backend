@@ -8,6 +8,7 @@ import {
   currentLoad,
   earningsFor,
   listMatters,
+  payoutHistory,
   setAvailability,
 } from "./service.js";
 
@@ -46,6 +47,11 @@ export function professionalRoutes(): Router {
       );
       return advanceMatter(actorOf(req), id, status);
     }),
+  );
+
+  router.get(
+    "/payouts",
+    handler((req) => payoutHistory(actorOf(req))),
   );
 
   router.get(
