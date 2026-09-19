@@ -11,6 +11,7 @@ import { attachActor } from "./modules/auth/middleware.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { catalogueRoutes } from "./modules/catalogue/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
+import { paymentRoutes, webhookRoutes } from "./modules/payments/routes.js";
 
 /**
  * Builds the application.
@@ -32,6 +33,14 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
   // The portal is the only browser client. Credentials are on because the session
   // travels as an httpOnly cookie, and a wildcard origin is invalid with credentials.
   app.use(cors({ origin: env.PORTAL_ORIGIN, credentials: true }));
+
+  /**
+   * The gateway webhook needs the byte-for-byte body to verify its HMAC signature.
+   * JSON re-serialised after parsing differs from what Razorpay signed — key order,
+   * spacing, unicode escaping — so the signature would never match. Registered ahead
+   * of the JSON parser, and scoped to this one path.
+   */
+  app.use("/webhooks", express.raw({ type: "*/*", limit: "1mb" }), webhookRoutes());
 
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
@@ -63,6 +72,7 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
   app.use("/auth", authRoutes());
   app.use("/catalogue", catalogueRoutes());
   app.use("/orders", orderRoutes());
+  app.use("/payments", paymentRoutes());
 
   mountRoutes?.(app);
 

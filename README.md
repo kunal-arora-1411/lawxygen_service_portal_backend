@@ -111,6 +111,81 @@ client agreed to pay today, because the invoice and the ledger both key off it.
 sequential, so a 403 would confirm the reference exists and let anyone count the
 platform's orders by walking upwards from `LX-000001`.
 
+## Payments
+
+| Method | Path                           | Notes                                                                      |
+| ------ | ------------------------------ | -------------------------------------------------------------------------- |
+| POST   | `/payments/:reference/intent`  | Creates the gateway order. Amount comes from the order, never the request. |
+| GET    | `/payments/:reference/invoice` | The GST invoice, once captured.                                            |
+| POST   | `/webhooks/razorpay`           | Gateway only. No session; signature-verified.                              |
+
+**The webhook is the source of truth**, never the browser redirect. A redirect is a
+claim made by the client's browser; a signed webhook is a statement by Razorpay. A
+client who closes the tab after paying still ends up with a paid order.
+
+**The webhook route reads a raw body.** It is mounted ahead of `express.json()` in
+`app.ts` because the HMAC is computed over the exact bytes Razorpay signed — JSON
+re-serialised after parsing differs in key order and spacing and would never match.
+
+**Dedupe is on _processed_, not on _received_.** The obvious version inserts the event
+id, treats a duplicate-key error as "already seen", and returns 200 — which silently
+drops every retry of an event whose first attempt _failed_. The order stays unpaid while
+the gateway dashboard shows successful delivery. So an event is recorded on arrival with
+`processed_at` null, and only a row that already has a `processed_at` is a true
+duplicate.
+
+**Capture has two independent locks.** The order status transition is a conditional
+`UPDATE` — only an order still awaiting payment can become paid — and `ledger_entries`
+is unique on `(kind, source_ref)`. Either alone would do; both means a bypass of one
+still cannot journal a capture twice.
+
+**The captured amount is checked against the order.** If the gateway reports a figure
+that differs from what the client agreed to, the transaction aborts and the event is
+retried rather than journalling an amount nobody authorised.
+
+### The ledger
+
+Double-entry, with balance enforced by a **deferred constraint trigger** (migration
+`0003`), checked at COMMIT rather than per statement — the lines of one entry are
+inserted separately and are legitimately unbalanced in between. An application-level
+check would be bypassed by any script that writes lines directly; a constraint is not.
+
+A ₹5,000 order posts:
+
+```
+debit   ASSET:GATEWAY_RECEIVABLE   500000
+credit  LIABILITY:GST_OUTPUT        76271
+credit  INCOME:COMMISSION          127119
+credit  LIABILITY:PRO_PAYABLE      296313
+credit  LIABILITY:TDS_PAYABLE         297
+```
+
+Account codes are text, not an enum, because the GST determination below changes the
+mapping and that should not be a migration.
+
+`deriveAmounts` in `src/lib/money.ts` guarantees **the parts sum exactly to the gross**:
+each split takes its last component as the residual rather than rounding it separately,
+so the total cannot drift by a paisa. Tested across every rupee to ₹2,000 and every
+plausible rate combination.
+
+**Invoice numbers come from the `counters` table, allocated inside the capture
+transaction.** Indian GST requires the series to be gapless within a financial year, and
+a PostgreSQL sequence does not roll back — `nextval` would burn a number every time a
+capture aborted. The financial year boundary is evaluated in **IST**: 20:30 UTC on 31
+March is already the new year, and a server reasoning in UTC would leave a gap.
+
+### Two open questions for a CA
+
+Both change the invoice, not the ledger shape, and both are configuration today.
+
+1. **Which withholding section applies.** §194-O (e-commerce operator, 0.1% of gross)
+   most likely displaces §194J (professional fees, 10%) for a marketplace collecting on
+   behalf of professionals — a hundredfold difference. `tdsSection` and `tdsBps` are
+   settings, and every payout will record which was applied.
+2. **Principal or agent for GST.** Whether Lawxygen invoices the client for the whole
+   amount with the professional invoicing Lawxygen, or the professional supplies the
+   client and Lawxygen charges only commission. The default here is principal.
+
 ## Conventions
 
 These are load-bearing, and most of them exist because something expensive happened once.

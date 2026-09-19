@@ -17,3 +17,9 @@ process.env.SESSION_SECRET ??= "test-only-session-secret-not-for-any-real-enviro
 // real and needs a client id. These are placeholders and reach no network.
 process.env.GOOGLE_CLIENT_ID ??= "test-google-client-id.apps.googleusercontent.com";
 process.env.GOOGLE_CLIENT_SECRET ??= "test-google-client-secret";
+
+// Payments: the Orders API is stubbed, but webhook signatures are computed and verified
+// for real against this secret, so the tests exercise the actual HMAC path.
+process.env.RAZORPAY_KEY_ID ??= "rzp_test_placeholder";
+process.env.RAZORPAY_KEY_SECRET ??= "test-razorpay-key-secret";
+process.env.RAZORPAY_WEBHOOK_SECRET ??= "test-razorpay-webhook-secret";

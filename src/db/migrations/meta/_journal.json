@@ -15,6 +15,20 @@
       "when": 1789821939857,
       "tag": "0001_catalogue_and_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789822854241,
+      "tag": "0002_payments_and_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789822869275,
+      "tag": "0003_ledger_balance_trigger",
+      "breakpoints": true
     }
   ]
 }
