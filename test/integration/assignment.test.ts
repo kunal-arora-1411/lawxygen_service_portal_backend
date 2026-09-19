@@ -178,7 +178,26 @@ async function orderStatus(reference: string): Promise<string> {
   return String(row!.status);
 }
 
-beforeEach(() => {
+/**
+ * Establishes the precondition every test here depends on: the only eligible supply is
+ * what this test just created, and no work is already queued.
+ *
+ * Both halves were learned the hard way. `dispatchPending()` drains the **global**
+ * outbox, so assignment events left by another suite get processed here and consume
+ * the capacity a test is measuring. And making only *this file's* professionals
+ * unavailable is not enough — anything created outside it, by another suite or by hand
+ * against the dev database, is still eligible. The capacity test then reads a breach
+ * that is really a stranger absorbing work.
+ */
+async function isolateSupply(): Promise<void> {
+  await sql!`update professionals set available = false`;
+  await sql!`update orders set status = 'cancelled'
+             where status in ('paid', 'awaiting_assignment', 'assignment_escalated')`;
+  await sql!`delete from outbox_events where status = 'pending'`;
+}
+
+beforeEach(async () => {
+  if (sql) await isolateSupply();
   setGatewayOrderCreator((input) =>
     Promise.resolve({
       id: `order_${randomUUID().replace(/-/g, "").slice(0, 14)}`,
@@ -264,7 +283,6 @@ suite("assignment on payment", () => {
 suite("eligibility", () => {
   it("queues the order when nobody is qualified, rather than losing it", async () => {
     // No professional at all for this category.
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
 
     const reference = await payForService(await newClient());
     await dispatchPending();
@@ -273,7 +291,6 @@ suite("eligibility", () => {
   });
 
   it("assigns the queued order as soon as a professional is approved", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     const reference = await payForService(await newClient());
     await dispatchPending();
     expect(await orderStatus(reference)).toBe("awaiting_assignment");
@@ -296,7 +313,6 @@ suite("eligibility", () => {
    * nullability Drizzle's `one()` infers wrongly — filtered in SQL for that reason.
    */
   it("skips a professional who has not completed payout onboarding", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     await newProfessional({ payout: false });
 
     const reference = await payForService(await newClient());
@@ -306,7 +322,6 @@ suite("eligibility", () => {
   });
 
   it("skips a professional who is unavailable or unverified", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     await newProfessional({ available: false });
     await newProfessional({ verified: false });
 
@@ -325,8 +340,6 @@ suite("concurrency", () => {
    * rather than all reading the same one as free.
    */
   it("never exceeds capacity when many payments land together", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
-
     const pros = [
       await newProfessional({ capacity: 2 }),
       await newProfessional({ capacity: 2 }),
@@ -362,7 +375,6 @@ suite("concurrency", () => {
 
   /** The partial unique index makes a second open assignment for one order impossible. */
   it("produces one assignment even if the event is dispatched twice", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     await newProfessional();
 
     const reference = await payForService(await newClient());
@@ -383,7 +395,6 @@ suite("concurrency", () => {
 
 suite("acknowledgement and escalation", () => {
   it("lets the professional acknowledge, moving the matter in progress", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     const pro = await newProfessional();
     const reference = await payForService(await newClient());
     await dispatchPending();
@@ -400,7 +411,6 @@ suite("acknowledgement and escalation", () => {
   });
 
   it("flags a matter nobody acknowledged in time", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     await newProfessional();
     const reference = await payForService(await newClient());
     await dispatchPending();
@@ -422,7 +432,6 @@ suite("acknowledgement and escalation", () => {
 
   /** A late acknowledgement must not resurrect a matter admin has already taken back. */
   it("refuses to acknowledge after escalation", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     const pro = await newProfessional();
     const reference = await payForService(await newClient());
     await dispatchPending();
@@ -445,7 +454,6 @@ suite("acknowledgement and escalation", () => {
 
 suite("admin override", () => {
   it("reassigns a matter to a different professional", async () => {
-    await sql!`update professionals set available = false where id = any(${professionalIds})`;
     const first = await newProfessional();
     const reference = await payForService(await newClient());
     await dispatchPending();

@@ -120,6 +120,10 @@ afterAll(async () => {
   // "money vanishes" edit it exists to stop. The FK cascades the lines away.
   const mine = sql`select id from orders where user_id in
                    (select id from users where email = any(${emails}))`;
+  // Capture emits assignment events. Leaving them pending means another suite's
+  // dispatcher picks them up and assigns this suite's orders to its professionals.
+  await sql`delete from outbox_events where aggregate_id in (select id::text from orders
+            where user_id in (select id from users where email = any(${emails})))`;
   await sql`delete from ledger_entries where order_id in (${mine})`;
   await sql`delete from invoices where order_id in (${mine})`;
   await sql`delete from payments where order_id in (${mine})`;
