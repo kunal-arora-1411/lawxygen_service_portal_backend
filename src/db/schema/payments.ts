@@ -240,3 +240,58 @@ export type PaymentStatus = (typeof paymentStatusEnum.enumValues)[number];
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
 export type LedgerLine = typeof ledgerLines.$inferSelect;
 export type Invoice = typeof invoices.$inferSelect;
+
+/**
+ * Daily reconciliation.
+ *
+ * This is the only thing in the system that detects a webhook which never arrived at
+ * all. Every other safeguard — signature checks, dedupe on processed, the atomic claim
+ * — protects against a webhook that *did* arrive being mishandled. Nothing protects
+ * against silence, because silence looks exactly like a quiet day.
+ *
+ * So a run asks the gateway what it thinks happened and compares it to what we
+ * recorded. A capture we missed is repaired automatically, through the same code path
+ * the webhook would have taken. Anything involving a discrepancy in an amount is
+ * recorded and left alone: a mismatch is a question for a person, not something to
+ * paper over.
+ */
+export const reconciliationRuns = pgTable(
+  "reconciliation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+
+    /** How many payments the gateway reported inside the window. */
+    gatewayCount: integer("gateway_count").notNull().default(0),
+    /** How many of those already matched a captured payment here. */
+    matchedCount: integer("matched_count").notNull().default(0),
+    /** Captures we had missed and have now applied. */
+    repairedCount: integer("repaired_count").notNull().default(0),
+
+    /**
+     * Every discrepancy, as `{ kind, providerPaymentId, … }`. JSON rather than a table
+     * because the shape differs per kind and nothing queries inside it — this is read
+     * by a person looking at one run.
+     */
+    exceptions: jsonb("exceptions").notNull().default([]),
+
+    /** Total debits minus total credits across the whole ledger. Must be zero. */
+    ledgerImbalancePaise: bigint("ledger_imbalance_paise", { mode: "number" }).notNull().default(0),
+
+    /** `clean` means nothing to look at; `exceptions` means somebody should. */
+    status: text("status").notNull(),
+    /** Set when the run itself could not complete — the gateway was unreachable. */
+    failureReason: text("failure_reason"),
+
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("reconciliation_runs_window_idx").on(t.windowStart),
+    index("reconciliation_runs_started_idx").on(t.startedAt),
+  ],
+);
+
+export type ReconciliationRun = typeof reconciliationRuns.$inferSelect;

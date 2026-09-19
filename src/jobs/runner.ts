@@ -1,6 +1,7 @@
 import { drainAwaitingAssignment } from "../modules/assignment/engine.js";
 import { escalateOverdueAssignments } from "../modules/assignment/escalation.js";
 import { dispatchPending } from "../modules/events/outbox.js";
+import { reconcileScheduled } from "../modules/payments/reconciliation.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -30,6 +31,17 @@ const ESCALATION_INTERVAL_MS = 5 * 60_000;
  * would have stayed there until somebody happened to toggle availability.
  */
 const DRAIN_INTERVAL_MS = 60_000;
+
+/**
+ * Reconciliation runs every six hours over a 48-hour window, rather than once a night
+ * over a day. The overlap is free — repairs go through the idempotent capture path —
+ * and it means a missed webhook is found within hours instead of the next morning.
+ *
+ * It does nothing useful until the gateway is configured: the lister refuses, the run
+ * is recorded as failed, and that is the honest state of affairs rather than a screen
+ * full of clean runs that never asked anybody anything.
+ */
+const RECONCILE_INTERVAL_MS = 6 * 60 * 60_000;
 
 export type StopJobs = () => void;
 
@@ -65,6 +77,7 @@ export function startJobs(): StopJobs {
     every("outbox", OUTBOX_INTERVAL_MS, () => dispatchPending()),
     every("escalation", ESCALATION_INTERVAL_MS, () => escalateOverdueAssignments()),
     every("drain-queue", DRAIN_INTERVAL_MS, () => drainAwaitingAssignment()),
+    every("reconcile", RECONCILE_INTERVAL_MS, () => reconcileScheduled()),
   ];
 
   return () => {

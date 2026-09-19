@@ -41,6 +41,8 @@ const FORBIDDEN_WHILE_IMPERSONATING = new Set([
   "payout.release",
   "payout.hold",
   "refund.approve",
+  // Repairs a missed capture, which issues an invoice and assigns a professional.
+  "reconciliation.run",
   "invoice.reissue",
   "user.role.change",
   "user.delete",

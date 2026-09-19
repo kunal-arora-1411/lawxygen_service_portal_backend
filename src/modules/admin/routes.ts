@@ -17,6 +17,7 @@ import {
 import { reassignOrder, suspendProfessional, verifyProfessional } from "./service.js";
 import { draftBatch, listBatches, payableBalances, releaseBatch } from "../payouts/service.js";
 import { refundOrder } from "../payments/refund.js";
+import { recentRuns, runReconciliation } from "../payments/reconciliation.js";
 
 export function adminRoutes(): Router {
   const router = Router();
@@ -131,6 +132,30 @@ export function adminRoutes(): Router {
       const { reference } = parse(orderReferenceSchema, req.params);
       const { reason } = parse(suspendSchema, req.body);
       return refundOrder(actorOf(req), reference, reason);
+    }),
+  );
+
+  // ----------------------------------------------------------- reconciliation
+
+  router.get(
+    "/reconciliation",
+    handler((req) => recentRuns(actorOf(req))),
+  );
+
+  /**
+   * On demand as well as nightly, because the moment somebody suspects a webhook was
+   * missed is the moment they want the answer, not tomorrow morning.
+   */
+  router.post(
+    "/reconciliation/run",
+    handler(async (req) => {
+      const { hours } = parse(
+        z.object({ hours: z.coerce.number().int().min(1).max(720).optional() }),
+        req.body,
+      );
+      const to = new Date();
+      const from = new Date(to.getTime() - (hours ?? 48) * 60 * 60 * 1000);
+      return runReconciliation(actorOf(req), { from, to });
     }),
   );
 

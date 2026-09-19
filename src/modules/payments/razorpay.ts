@@ -187,3 +187,98 @@ export function sendRefund(input: Parameters<SendRefund>[0]): Promise<RefundResu
   }
   return refundImpl(input);
 }
+
+/**
+ * Asking the gateway what it thinks happened.
+ *
+ * Used by reconciliation, and only there. The webhook remains the source of truth for
+ * a payment in the normal case; this is the fallback for when the webhook never came.
+ */
+export type GatewayPayment = {
+  id: string;
+  orderId: string | null;
+  amountPaise: number;
+  currency: string;
+  status: string;
+  amountRefundedPaise: number;
+  createdAt: Date;
+  method: string | null;
+};
+
+export type ListGatewayPayments = (window: { from: Date; to: Date }) => Promise<GatewayPayment[]>;
+
+type RazorpayPaymentRow = {
+  id: string;
+  order_id?: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  amount_refunded?: number;
+  created_at: number;
+  method?: string | null;
+};
+
+const liveList: ListGatewayPayments = async ({ from, to }) => {
+  const auth = Buffer.from(
+    `${required("RAZORPAY_KEY_ID")}:${required("RAZORPAY_KEY_SECRET")}`,
+  ).toString("base64");
+
+  const collected: GatewayPayment[] = [];
+  const count = 100;
+
+  // Razorpay caps a page at 100 and offers no cursor, so this walks `skip`. Bounded
+  // at 50 pages: a window with 5,000 payments in it is a different conversation, and
+  // an unbounded loop against a paging bug is how a job spins forever.
+  for (let skip = 0; skip < count * 50; skip += count) {
+    const query = new URLSearchParams({
+      from: String(Math.floor(from.getTime() / 1000)),
+      to: String(Math.floor(to.getTime() / 1000)),
+      count: String(count),
+      skip: String(skip),
+    });
+
+    const res = await fetch(`${API}/payments?${query.toString()}`, {
+      headers: { authorization: `Basic ${auth}` },
+    });
+
+    if (!res.ok) {
+      throw new ApiError("upstream_failure", "Could not read payments from the gateway.", {
+        cause: new Error(`Razorpay responded ${String(res.status)}: ${await res.text()}`),
+      });
+    }
+
+    const body = (await res.json()) as { items?: RazorpayPaymentRow[] };
+    const items = body.items ?? [];
+
+    for (const item of items) {
+      collected.push({
+        id: item.id,
+        orderId: item.order_id ?? null,
+        amountPaise: item.amount,
+        currency: item.currency,
+        status: item.status,
+        amountRefundedPaise: item.amount_refunded ?? 0,
+        createdAt: new Date(item.created_at * 1000),
+        method: item.method ?? null,
+      });
+    }
+
+    if (items.length < count) break;
+  }
+
+  return collected;
+};
+
+let listImpl: ListGatewayPayments = liveList;
+
+/** Test seam. Pass undefined to restore the live client. */
+export function setGatewayPaymentLister(override: ListGatewayPayments | undefined): void {
+  listImpl = override ?? liveList;
+}
+
+export function listGatewayPayments(window: { from: Date; to: Date }): Promise<GatewayPayment[]> {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError("upstream_failure", "The gateway is not configured.");
+  }
+  return listImpl(window);
+}
