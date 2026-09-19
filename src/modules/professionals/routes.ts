@@ -2,7 +2,14 @@ import { Router } from "express";
 import { z } from "zod";
 import { handler, parse } from "../../lib/http.js";
 import { actorOf, requireRole } from "../auth/middleware.js";
-import { acknowledge, currentLoad, listMatters, setAvailability } from "./service.js";
+import {
+  acknowledge,
+  advanceMatter,
+  currentLoad,
+  earningsFor,
+  listMatters,
+  setAvailability,
+} from "./service.js";
 
 export function professionalRoutes(): Router {
   const router = Router();
@@ -27,6 +34,23 @@ export function professionalRoutes(): Router {
       const { id } = parse(z.object({ id: z.uuid() }), req.params);
       return acknowledge(actorOf(req), id);
     }),
+  );
+
+  router.post(
+    "/matters/:id/status",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      const { status } = parse(
+        z.object({ status: z.enum(["in_progress", "awaiting_client", "completed"]) }),
+        req.body,
+      );
+      return advanceMatter(actorOf(req), id, status);
+    }),
+  );
+
+  router.get(
+    "/earnings",
+    handler((req) => earningsFor(actorOf(req))),
   );
 
   router.put(

@@ -4,6 +4,7 @@ import { assignments, DOMAIN_EVENTS, orders } from "../../db/schema/index.js";
 import { recordAudit } from "../../lib/auth/audit.js";
 import { logger } from "../../lib/logger.js";
 import { emit } from "../events/outbox.js";
+import { reverseAttribution } from "./attribution.js";
 
 /**
  * Flagging matters a professional has not picked up.
@@ -41,6 +42,9 @@ export async function escalateOverdueAssignments(limit = 100): Promise<number> {
         .returning({ id: assignments.id });
 
       if (!claimed) return;
+
+      // Never acknowledged, so never earned. Same reasoning as a revocation.
+      await reverseAttribution(tx, row.id);
 
       // The order goes back to a state admin can act on. The client is shown
       // "matching you with a professional" throughout — they should never see the

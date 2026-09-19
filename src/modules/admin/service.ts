@@ -4,6 +4,7 @@ import { assignments, DOMAIN_EVENTS, orders, professionals } from "../../db/sche
 import { ApiError } from "../../lib/api.js";
 import { recordAudit } from "../../lib/auth/audit.js";
 import { authorize, type Actor } from "../../lib/auth/policy.js";
+import { reverseAttribution } from "../assignment/attribution.js";
 import { assignOrder } from "../assignment/engine.js";
 import { emit } from "../events/outbox.js";
 
@@ -119,6 +120,10 @@ export async function reassignOrder(
       .returning({ id: assignments.id, professionalId: assignments.professionalId });
 
     if (revoked) {
+      // They no longer hold the matter, so they are no longer owed for it. Without
+      // this their earnings would claim money for work taken off them.
+      await reverseAttribution(tx, revoked.id);
+
       await emit(tx, {
         name: DOMAIN_EVENTS.ASSIGNMENT_REVOKED,
         aggregateType: "assignment",

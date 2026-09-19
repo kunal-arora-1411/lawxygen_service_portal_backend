@@ -161,6 +161,7 @@ export const DOMAIN_EVENTS = {
   ASSIGNMENT_CREATED: "assignment.created",
   ASSIGNMENT_DEFERRED: "order.assignment_deferred",
   ASSIGNMENT_ACKNOWLEDGED: "assignment.acknowledged",
+  ORDER_STATUS_CHANGED: "order.status_changed",
   ASSIGNMENT_ESCALATED: "assignment.escalated",
   ASSIGNMENT_REVOKED: "assignment.revoked",
   PROFESSIONAL_APPROVED: "professional.approved",

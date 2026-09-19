@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { closeDatabase } from "../../src/db/client.js";
 import { encryptField } from "../../src/lib/field-encryption.js";
+import { deriveAmounts } from "../../src/lib/money.js";
 import { escalateOverdueAssignments } from "../../src/modules/assignment/escalation.js";
 import { dispatchPending } from "../../src/modules/events/outbox.js";
 import { setGatewayOrderCreator } from "../../src/modules/payments/razorpay.js";
@@ -489,5 +490,174 @@ suite("admin override", () => {
       .get("/pro/matters")
       .set("Cookie", await newClient());
     expect(res.status).toBe(403);
+  });
+});
+
+suite("earnings attribution", () => {
+  /**
+   * At capture there is no professional, so the credit to LIABILITY:PRO_PAYABLE is
+   * owed to nobody in particular. Assignment reclassifies it to whoever took the
+   * matter, leaving the account's total untouched — which is what lets an earnings
+   * statement and a payout run both read the ledger instead of disagreeing.
+   */
+  it("attributes the payable to the professional on assignment", async () => {
+    const pro = await newProfessional();
+    const reference = await payForService(await newClient());
+    await dispatchPending();
+
+    const expected = deriveAmounts(PRICE).professionalNetPaise;
+
+    const [attributed] = await sql!`
+      select coalesce(sum(case when direction = 'credit' then amount_paise
+                               else -amount_paise end), 0)::bigint as balance
+      from ledger_lines
+      where account = 'LIABILITY:PRO_PAYABLE' and subject_id = ${pro.id}`;
+
+    expect(Number(attributed!.balance)).toBe(expected);
+
+    // The account total is unchanged by the reclassification: it moved between
+    // subjects rather than creating or destroying an obligation.
+    const [unattributed] = await sql!`
+      select coalesce(sum(case when direction = 'credit' then amount_paise
+                               else -amount_paise end), 0)::bigint as balance
+      from ledger_lines
+      where account = 'LIABILITY:PRO_PAYABLE'
+        and subject_id is null
+        and entry_id in (select id from ledger_entries where order_id =
+          (select id from orders where reference = ${reference}))`;
+
+    expect(Number(unattributed!.balance)).toBe(0);
+  });
+
+  it("reports the same figure through the earnings endpoint", async () => {
+    const pro = await newProfessional();
+    await payForService(await newClient());
+    await dispatchPending();
+
+    const res = await request(app).get("/pro/earnings").set("Cookie", pro.cookie).expect(200);
+
+    expect(res.body.data.pendingPaise).toBe(deriveAmounts(PRICE).professionalNetPaise);
+    expect(res.body.data.paidPaise).toBe(0);
+    expect(res.body.data.matters.open).toBe(1);
+  });
+
+  it("leaves the whole ledger balanced after attribution", async () => {
+    await newProfessional();
+    await payForService(await newClient());
+    await dispatchPending();
+
+    const [row] = await sql!`
+      select coalesce(sum(case when direction = 'debit' then amount_paise
+                               else -amount_paise end), 0)::bigint as imbalance
+      from ledger_lines`;
+
+    expect(Number(row!.imbalance)).toBe(0);
+  });
+
+  it("moves the attribution to the replacement when a matter is reassigned", async () => {
+    const first = await newProfessional();
+    const reference = await payForService(await newClient());
+    await dispatchPending();
+
+    await sql!`update professionals set available = false where id = ${first.id}`;
+    const second = await newProfessional();
+
+    await request(app)
+      .post(`/admin/orders/${reference}/reassign`)
+      .set("Cookie", await adminCookie())
+      .send({ reason: "Testing reassignment attribution" })
+      .expect(200);
+
+    const rows = await sql!`
+      select subject_id, coalesce(sum(case when direction = 'credit' then amount_paise
+                                           else -amount_paise end), 0)::bigint as balance
+      from ledger_lines
+      where account = 'LIABILITY:PRO_PAYABLE' and subject_id = any(${[first.id, second.id]})
+      group by subject_id`;
+
+    const bySubject = Object.fromEntries(rows.map((r) => [r.subject_id, Number(r.balance)]));
+    const share = deriveAmounts(PRICE).professionalNetPaise;
+
+    // The replacement is owed; the original is owed nothing. Leaving the original's
+    // attribution standing would show them earnings for work taken off them, and
+    // would have the ledger claim two people are owed for one order.
+    expect(bySubject[second.id]).toBe(share);
+    expect(bySubject[first.id] ?? 0).toBe(0);
+  });
+
+  it("takes back the attribution when a matter is escalated unacknowledged", async () => {
+    const pro = await newProfessional();
+    const reference = await payForService(await newClient());
+    await dispatchPending();
+
+    await sql!`update assignments set acknowledge_by = now() - interval '1 minute'
+               where order_id = (select id from orders where reference = ${reference})`;
+    await escalateOverdueAssignments();
+
+    const res = await request(app).get("/pro/earnings").set("Cookie", pro.cookie).expect(200);
+    expect(res.body.data.pendingPaise).toBe(0);
+  });
+});
+
+suite("working a matter", () => {
+  it("moves through in progress to completed", async () => {
+    const pro = await newProfessional();
+    await payForService(await newClient());
+    await dispatchPending();
+
+    const matters = await request(app).get("/pro/matters").set("Cookie", pro.cookie).expect(200);
+    const id = String(matters.body.data[0].assignmentId);
+
+    await request(app).post(`/pro/matters/${id}/acknowledge`).set("Cookie", pro.cookie).expect(200);
+
+    for (const status of ["awaiting_client", "in_progress", "completed"] as const) {
+      await request(app)
+        .post(`/pro/matters/${id}/status`)
+        .set("Cookie", pro.cookie)
+        .send({ status })
+        .expect(200);
+    }
+
+    const [row] = await sql!`select a.status, o.status as order_status from assignments a
+                             join orders o on o.id = a.order_id where a.id = ${id}`;
+    expect(row!.status).toBe("completed");
+    expect(row!.order_status).toBe("completed");
+  });
+
+  it("refuses to move a matter that was never acknowledged", async () => {
+    const pro = await newProfessional();
+    await payForService(await newClient());
+    await dispatchPending();
+
+    const matters = await request(app).get("/pro/matters").set("Cookie", pro.cookie).expect(200);
+    const id = String(matters.body.data[0].assignmentId);
+
+    const res = await request(app)
+      .post(`/pro/matters/${id}/status`)
+      .set("Cookie", pro.cookie)
+      .send({ status: "completed" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("refuses to move somebody else's matter", async () => {
+    const owner = await newProfessional();
+    await payForService(await newClient());
+    await dispatchPending();
+
+    const matters = await request(app).get("/pro/matters").set("Cookie", owner.cookie).expect(200);
+    const id = String(matters.body.data[0].assignmentId);
+    await request(app)
+      .post(`/pro/matters/${id}/acknowledge`)
+      .set("Cookie", owner.cookie)
+      .expect(200);
+
+    const stranger = await newProfessional();
+    const res = await request(app)
+      .post(`/pro/matters/${id}/status`)
+      .set("Cookie", stranger.cookie)
+      .send({ status: "completed" });
+
+    expect(res.status).toBe(409);
   });
 });

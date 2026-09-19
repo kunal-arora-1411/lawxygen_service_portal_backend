@@ -12,6 +12,7 @@ import { recordAudit } from "../../lib/auth/audit.js";
 import { isUniqueViolation } from "../../lib/db-errors.js";
 import { logger } from "../../lib/logger.js";
 import { emit } from "../events/outbox.js";
+import { attributePayable } from "./attribution.js";
 
 /**
  * Automatic assignment.
@@ -48,6 +49,8 @@ export async function assignOrder(orderId: string): Promise<AssignOutcome> {
         reference: orders.reference,
         status: orders.status,
         categoryId: orders.categoryId,
+        pricePaise: orders.pricePaise,
+        currency: orders.currency,
       })
       .from(orders)
       .where(eq(orders.id, orderId))
@@ -124,6 +127,25 @@ export async function assignOrder(orderId: string): Promise<AssignOutcome> {
       .update(professionals)
       .set({ lastAssignedAt: new Date() })
       .where(eq(professionals.id, professionalId));
+
+    /**
+     * Attribute the payable to whoever just took the matter.
+     *
+     * At capture there is no professional yet, so `LIABILITY:PRO_PAYABLE` is credited
+     * to nobody in particular. This moves it to them, which is what lets an earnings
+     * statement and a payout run both read the ledger rather than deriving money two
+     * different ways and eventually disagreeing.
+     *
+     * Reversed by `reverseAttribution` when a matter is revoked or escalated.
+     */
+    await attributePayable(tx, {
+      assignmentId,
+      orderId: order.id,
+      professionalId,
+      pricePaise: order.pricePaise,
+      currency: order.currency,
+      reference: order.reference,
+    });
 
     await emit(tx, {
       name: DOMAIN_EVENTS.ASSIGNMENT_CREATED,
