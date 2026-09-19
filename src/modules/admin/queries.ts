@@ -87,6 +87,13 @@ export type AdminOrder = {
   professionalName: string | null;
   /** Null until acknowledged; past means the escalation sweep will pick it up. */
   acknowledgeBy: Date | null;
+  /**
+   * Decided here, against the database's clock, rather than by the page comparing the
+   * deadline to `Date.now()`. Rendering against the wall clock is impure — the value
+   * differs between the server render and any later client render — and the database
+   * is the authority the escalation sweep itself uses.
+   */
+  acknowledgeOverdue: boolean;
 };
 
 export async function listOrders(
@@ -118,6 +125,9 @@ export async function listOrders(
       clientEmail: users.email,
       professionalName: professionals.displayName,
       acknowledgeBy: assignments.acknowledgeBy,
+      acknowledgeOverdue: sql<boolean>`coalesce(
+        ${assignments.status} = 'assigned' and ${assignments.acknowledgeBy} < now(), false
+      )`,
     })
     .from(orders)
     .innerJoin(users, eq(users.id, orders.userId))
