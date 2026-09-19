@@ -111,20 +111,32 @@ suite("seed parity with the marketing catalogue", () => {
 });
 
 suite("the pricing constraint", () => {
+  const SUBJECT = "trademark-registration-indian";
+
+  /**
+   * Cleared first, and restored after. An earlier version asserted against whatever
+   * price this service happened to carry, so it passed on a fresh database and failed
+   * the moment anyone — a developer, another suite — had priced it.
+   */
+  beforeAll(async () => {
+    if (!sql) return;
+    await sql`update services set active = false, price_paise = null, turnaround_days = null
+              where slug = ${SUBJECT}`;
+  });
+
   /**
    * The database, not the application, is what makes an unpriced published service
    * impossible. Without this, a forgotten price is a checkout at zero.
    */
   it("refuses to publish a service with no price", async () => {
-    await expect(
-      sql!`update services set active = true
-           where slug = 'trademark-registration-indian' and price_paise is null`,
-    ).rejects.toThrow(/services_priced_when_active/);
+    await expect(sql!`update services set active = true where slug = ${SUBJECT}`).rejects.toThrow(
+      /services_priced_when_active/,
+    );
   });
 
   it("refuses a negative price", async () => {
     await expect(
-      sql!`update services set price_paise = -1 where slug = 'trademark-registration-indian'`,
+      sql!`update services set price_paise = -1 where slug = ${SUBJECT}`,
     ).rejects.toThrow(/services_price_non_negative/);
   });
 });
