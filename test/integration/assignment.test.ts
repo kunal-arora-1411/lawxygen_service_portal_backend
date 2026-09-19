@@ -369,11 +369,20 @@ suite("concurrency", () => {
       if ((await dispatchPending()) === 0) break;
     }
 
-    // Nothing may have failed quietly on the way. An event sitting in backoff with an
-    // error is the case that would otherwise look identical to a slow dispatch.
+    /**
+     * Nothing may have failed quietly on the way. An event sitting in backoff with an
+     * error is otherwise indistinguishable from a slow dispatch.
+     *
+     * The message carries the error text because the suite's cleanup deletes these
+     * rows: a bare "expected [] to equal [...]" leaves nothing to investigate, and
+     * this has already fired once with no evidence left behind.
+     */
     const stuck = await sql!`select name, attempts, last_error from outbox_events
                              where last_error is not null or status = 'dead'`;
-    expect(stuck, "no outbox event should have errored").toEqual([]);
+    expect(
+      stuck,
+      `outbox events failed: ${stuck.map((e) => `${String(e.name)} after ${String(e.attempts)}: ${String(e.last_error)}`).join(" | ")}`,
+    ).toEqual([]);
 
     const counts = await sql!`
       select professional_id, count(*)::int as open

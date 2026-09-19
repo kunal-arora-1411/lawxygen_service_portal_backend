@@ -6,6 +6,32 @@
  */
 import "../src/lib/load-env.js";
 
+/**
+ * Tests get their own database, always.
+ *
+ * Sharing one with a running `npm run dev` corrupts both. The dev server's background
+ * jobs are live — the outbox dispatcher every two seconds, the queue drain every
+ * minute — so they consume the events a test just emitted and assign the test's orders
+ * to whatever professionals happen to be seeded. That produced exactly the kind of
+ * intermittent, unreproducible count mismatch that gets written off as flakiness, and
+ * it cost real time before the cause was obvious.
+ *
+ * It runs the other way too: the suite deactivates every professional to isolate
+ * itself, which silently breaks whatever you were demonstrating in the browser.
+ *
+ * Derived from DATABASE_URL by swapping the database name, so there is one thing to
+ * configure rather than two that can disagree.
+ */
+const configured = process.env.DATABASE_URL;
+if (configured && !process.env.TEST_DATABASE_URL) {
+  const url = new URL(configured);
+  url.pathname = `${url.pathname.replace(/\/$/, "")}_test`;
+  process.env.TEST_DATABASE_URL = url.toString();
+}
+if (process.env.TEST_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+}
+
 // Several tests assert on deliberate failures. Logging them buries the actual result.
 process.env.LOG_LEVEL = "silent";
 

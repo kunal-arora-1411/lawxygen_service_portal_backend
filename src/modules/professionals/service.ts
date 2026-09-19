@@ -9,6 +9,7 @@ import {
   professionals,
   users,
   type AssignmentStatus,
+  type ProfessionalStatus,
   type OrderStatus,
 } from "../../db/schema/index.js";
 import { ApiError } from "../../lib/api.js";
@@ -39,6 +40,12 @@ export type MatterView = {
   acknowledgeBy: Date | null;
   acknowledgedAt: Date | null;
   createdAt: Date;
+  /**
+   * Decided by the database's clock — the same one the escalation sweep uses — rather
+   * than by the page comparing against `Date.now()` while rendering. That comparison
+   * is impure and can disagree between the server render and a later client one.
+   */
+  acknowledgeOverdue: boolean;
   /** Contact details, released only once the matter is theirs. */
   client: { name: string | null; email: string | null; phone: string | null } | null;
 };
@@ -57,6 +64,9 @@ export async function listMatters(actor: Actor, openOnly = false): Promise<Matte
       acknowledgeBy: assignments.acknowledgeBy,
       acknowledgedAt: assignments.acknowledgedAt,
       createdAt: assignments.createdAt,
+      acknowledgeOverdue: sql<boolean>`coalesce(
+        ${assignments.status} = 'assigned' and ${assignments.acknowledgeBy} < now(), false
+      )`,
       clientName: users.name,
       clientEmail: users.email,
       clientPhone: users.phone,
@@ -83,6 +93,7 @@ export async function listMatters(actor: Actor, openOnly = false): Promise<Matte
     acknowledgeBy: row.acknowledgeBy,
     acknowledgedAt: row.acknowledgedAt,
     createdAt: row.createdAt,
+    acknowledgeOverdue: row.acknowledgeOverdue,
     client: { name: row.clientName, email: row.clientEmail, phone: row.clientPhone },
   }));
 }
@@ -190,11 +201,24 @@ export async function setAvailability(
   return { available };
 }
 
-export async function currentLoad(actor: Actor): Promise<{ open: number; capacity: number }> {
+/**
+ * Slots in use, and whether they are accepting more.
+ *
+ * `available` belongs here rather than being read from the admin professional list —
+ * that endpoint is admin-only, so a professional asking about themselves would get a
+ * 403 and the UI would fall back to a guess about their own state.
+ */
+export async function currentLoad(
+  actor: Actor,
+): Promise<{ open: number; capacity: number; available: boolean; status: ProfessionalStatus }> {
   const professional = await professionalFor(actor);
 
   const [row] = await db
-    .select({ capacity: professionals.concurrentCapacity })
+    .select({
+      capacity: professionals.concurrentCapacity,
+      available: professionals.available,
+      status: professionals.status,
+    })
     .from(professionals)
     .where(eq(professionals.id, professional.id))
     .limit(1);
@@ -209,7 +233,12 @@ export async function currentLoad(actor: Actor): Promise<{ open: number; capacit
       ),
     );
 
-  return { open: open.length, capacity: row?.capacity ?? 0 };
+  return {
+    open: open.length,
+    capacity: row?.capacity ?? 0,
+    available: row?.available ?? false,
+    status: row?.status ?? "draft",
+  };
 }
 
 /**

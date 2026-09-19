@@ -1,3 +1,4 @@
+import { drainAwaitingAssignment } from "../modules/assignment/engine.js";
 import { escalateOverdueAssignments } from "../modules/assignment/escalation.js";
 import { dispatchPending } from "../modules/events/outbox.js";
 import { logger } from "../lib/logger.js";
@@ -17,6 +18,18 @@ import { logger } from "../lib/logger.js";
 
 const OUTBOX_INTERVAL_MS = 2_000;
 const ESCALATION_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Retry the queue of orders parked for want of a professional.
+ *
+ * Supply changes already drain it — approving someone, or coming back available. That
+ * covers the case the queue exists for, and misses a smaller one that is just as bad:
+ * an order can be deferred because every candidate was *momentarily locked* by another
+ * assigner, not because nobody was free. Seen in practice with a single professional
+ * and two payments seconds apart; the second order queued and, with no periodic retry,
+ * would have stayed there until somebody happened to toggle availability.
+ */
+const DRAIN_INTERVAL_MS = 60_000;
 
 export type StopJobs = () => void;
 
@@ -51,6 +64,7 @@ export function startJobs(): StopJobs {
   const timers = [
     every("outbox", OUTBOX_INTERVAL_MS, () => dispatchPending()),
     every("escalation", ESCALATION_INTERVAL_MS, () => escalateOverdueAssignments()),
+    every("drain-queue", DRAIN_INTERVAL_MS, () => drainAwaitingAssignment()),
   ];
 
   return () => {
