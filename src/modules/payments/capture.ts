@@ -1,11 +1,12 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { invoices, orders, payments } from "../../db/schema/index.js";
+import { DOMAIN_EVENTS, invoices, orders, payments } from "../../db/schema/index.js";
 import { ApiError } from "../../lib/api.js";
 import { nextCounterValue } from "../../lib/counters.js";
 import { financialYearOf, formatInvoiceNumber } from "../../lib/financial-year.js";
 import { logger } from "../../lib/logger.js";
 import { deriveAmounts, DEFAULT_MONEY_SETTINGS, type MoneySettings } from "../../lib/money.js";
+import { emit } from "../events/outbox.js";
 import { ACCOUNTS, postEntry, type LedgerLineInput } from "./ledger.js";
 
 /**
@@ -161,6 +162,27 @@ export async function applyCapture(input: CaptureInput): Promise<CaptureOutcome>
       gstRateBps: settings.gstBps,
       currency: claimed.currency,
       issuedAt,
+    });
+
+    /**
+     * Emitted in this transaction, acted on outside it.
+     *
+     * Assignment must not run inline: a capture that failed because no professional
+     * was free would roll back a payment that genuinely arrived. The event commits
+     * with the money, and the dispatcher picks it up afterwards.
+     */
+    await emit(tx, {
+      name: DOMAIN_EVENTS.ORDER_PAID,
+      aggregateType: "order",
+      aggregateId: claimed.id,
+      payload: { reference: claimed.reference, invoiceNumber: number },
+    });
+
+    await emit(tx, {
+      name: DOMAIN_EVENTS.ASSIGNMENT_REQUESTED,
+      aggregateType: "order",
+      aggregateId: claimed.id,
+      payload: { reference: claimed.reference },
     });
 
     return { applied: true, orderReference: claimed.reference, invoiceNumber: number };

@@ -5,6 +5,7 @@ import { createApp } from "./app.js";
 import { assertDatabaseReachable, closeDatabase } from "./db/client.js";
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
+import { startJobs } from "./jobs/runner.js";
 
 /**
  * Process entry point.
@@ -21,8 +22,11 @@ async function main(): Promise<void> {
     logger.info({ port: env.PORT, appEnv: env.APP_ENV }, "api listening");
   });
 
+  const stopJobs = startJobs();
+
   const shutdown = (signal: string) => {
     logger.info({ signal }, "shutting down");
+    stopJobs();
     server.close(() => {
       void closeDatabase().then(
         () => process.exit(0),

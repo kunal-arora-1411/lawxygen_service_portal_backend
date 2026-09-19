@@ -4,3 +4,5 @@ export * from "./catalogue.js";
 export * from "./counters.js";
 export * from "./orders.js";
 export * from "./payments.js";
+export * from "./professionals.js";
+export * from "./assignments.js";

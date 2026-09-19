@@ -186,6 +186,71 @@ Both change the invoice, not the ledger shape, and both are configuration today.
    amount with the professional invoicing Lawxygen, or the professional supplies the
    client and Lawxygen charges only commission. The default here is principal.
 
+## Professionals and assignment
+
+| Method | Path                                | Notes                                                        |
+| ------ | ----------------------------------- | ------------------------------------------------------------ |
+| GET    | `/pro/matters`                      | `?open=true` for the current queue. Includes client contact. |
+| GET    | `/pro/load`                         | Open matters against capacity.                               |
+| POST   | `/pro/matters/:id/acknowledge`      | Confirms the matter is picked up.                            |
+| PUT    | `/pro/availability`                 | `{ available }`. Turning it on drains the queue.             |
+| GET    | `/admin/queue`                      | Awaiting-assignment and escalated counts.                    |
+| POST   | `/admin/professionals/:id/verify`   | Approves into the pool; drains the queue.                    |
+| POST   | `/admin/professionals/:id/suspend`  | `{ reason }`. Reason is required.                            |
+| POST   | `/admin/orders/:reference/reassign` | `{ reason }`. Revokes and re-runs the engine.                |
+
+**Assignment is automatic.** On a confirmed payment the engine claims exactly one
+approved, available, qualified professional with a payout identity. Nobody picks.
+
+**`FOR UPDATE SKIP LOCKED` is the whole concurrency mechanism.** Concurrent captures
+lock _different_ candidate rows rather than queueing behind the same one, so simultaneous
+payments fan out across the pool and no professional is counted as free by two assigners
+at once. Proven by a test: three professionals at capacity two absorb exactly six of ten
+concurrent payments, and the other four queue.
+
+**Load is counted from `assignments`, not kept as a column.** A denormalised counter must
+be decremented on every exit path — completed, declined, revoked, escalated — and the day
+one is missed a professional silently stops receiving work. Counting is slower and cannot
+drift.
+
+**A professional without a payout identity is not eligible.** They cannot be paid, so
+assigning them creates work nobody can settle. This is the reverse one-to-one whose
+nullability Drizzle's `one()` infers wrongly — filtered in SQL for exactly that reason.
+
+**An order with no eligible professional is never lost.** It parks in
+`awaiting_assignment`, visible to admin, and is re-driven the moment supply appears —
+approving a professional or flipping availability emits an event that drains the queue.
+
+**Escalation is a swept deadline, not a timer.** An in-process timer dies with the
+process, and a paid matter sitting unacknowledged is precisely the failure nobody
+notices unaided. Escalating does not reassign automatically: the professional may be
+mid-conversation off-platform, and moving it silently would put two people on one job.
+
+### The outbox
+
+Domain events are written in the **same transaction** as the change that caused them, and
+acted on outside it. Both directions matter: an event cannot exist for a change that
+rolled back, and — more importantly — a capture must never fail because no professional
+was free. The money arrived either way.
+
+Handlers must be **idempotent**: a partial failure re-runs every subscriber for the
+event. The assignment handler relies on `assignments_one_open_per_order_uq`, a partial
+unique index permitting one open assignment per order, so a redelivery cannot double-book.
+
+`src/modules/events/subscribers.ts` is the entire wiring. **Adding WhatsApp in Phase 2 is
+a new subscriber there and nothing else** — no emitting code changes and no schema
+changes, because phone numbers and messaging consent are already captured at
+registration.
+
+### Encrypted fields
+
+PAN, GSTIN and bank account numbers use AES-256-GCM via `src/lib/field-encryption.ts`,
+keyed by `FIELD_ENCRYPTION_KEY` (32 raw bytes, base64). Disk encryption protects a stolen
+drive and nothing else — not SQL injection, a leaked read-replica credential, or a backup
+copied somewhere it should not be. Values are stored `v1:<iv>:<tag>:<ciphertext>`; the
+version prefix is what makes key rotation possible later. The account's last four digits
+are kept in the clear so support can identify an account without decrypting anything.
+
 ## Conventions
 
 These are load-bearing, and most of them exist because something expensive happened once.

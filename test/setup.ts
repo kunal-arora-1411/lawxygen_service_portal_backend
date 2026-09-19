@@ -18,6 +18,9 @@ process.env.SESSION_SECRET ??= "test-only-session-secret-not-for-any-real-enviro
 process.env.GOOGLE_CLIENT_ID ??= "test-google-client-id.apps.googleusercontent.com";
 process.env.GOOGLE_CLIENT_SECRET ??= "test-google-client-secret";
 
+// Field encryption for PAN and bank details. Test-only key.
+process.env.FIELD_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
+
 // Payments: the Orders API is stubbed, but webhook signatures are computed and verified
 // for real against this secret, so the tests exercise the actual HMAC path.
 process.env.RAZORPAY_KEY_ID ??= "rzp_test_placeholder";

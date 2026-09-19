@@ -1,0 +1,210 @@
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { db } from "../../db/client.js";
+import {
+  assignments,
+  DOMAIN_EVENTS,
+  OPEN_ASSIGNMENT_STATUSES,
+  orders,
+  professionals,
+  users,
+  type AssignmentStatus,
+} from "../../db/schema/index.js";
+import { ApiError } from "../../lib/api.js";
+import { recordAudit } from "../../lib/auth/audit.js";
+import { authorize, type Actor } from "../../lib/auth/policy.js";
+import { emit } from "../events/outbox.js";
+
+/** A professional's own view of their work. */
+
+async function professionalFor(actor: Actor): Promise<{ id: string; displayName: string }> {
+  const [row] = await db
+    .select({ id: professionals.id, displayName: professionals.displayName })
+    .from(professionals)
+    .where(eq(professionals.userId, actor.userId))
+    .limit(1);
+
+  if (!row) throw new ApiError("forbidden", "This account is not a professional.");
+  return row;
+}
+
+export type MatterView = {
+  assignmentId: string;
+  status: AssignmentStatus;
+  reference: string;
+  serviceTitle: string;
+  categorySlug: string;
+  acknowledgeBy: Date | null;
+  acknowledgedAt: Date | null;
+  createdAt: Date;
+  /** Contact details, released only once the matter is theirs. */
+  client: { name: string | null; email: string | null; phone: string | null } | null;
+};
+
+export async function listMatters(actor: Actor, openOnly = false): Promise<MatterView[]> {
+  authorize(actor, "assignment.list", { minimumRole: "professional" });
+  const professional = await professionalFor(actor);
+
+  const rows = await db
+    .select({
+      assignmentId: assignments.id,
+      status: assignments.status,
+      reference: orders.reference,
+      serviceTitle: orders.serviceTitle,
+      categorySlug: orders.categorySlug,
+      acknowledgeBy: assignments.acknowledgeBy,
+      acknowledgedAt: assignments.acknowledgedAt,
+      createdAt: assignments.createdAt,
+      clientName: users.name,
+      clientEmail: users.email,
+      clientPhone: users.phone,
+    })
+    .from(assignments)
+    .innerJoin(orders, eq(orders.id, assignments.orderId))
+    .innerJoin(users, eq(users.id, orders.userId))
+    .where(
+      openOnly
+        ? and(
+            eq(assignments.professionalId, professional.id),
+            inArray(assignments.status, [...OPEN_ASSIGNMENT_STATUSES]),
+          )
+        : eq(assignments.professionalId, professional.id),
+    )
+    .orderBy(desc(assignments.createdAt));
+
+  return rows.map((row) => ({
+    assignmentId: row.assignmentId,
+    status: row.status,
+    reference: row.reference,
+    serviceTitle: row.serviceTitle,
+    categorySlug: row.categorySlug,
+    acknowledgeBy: row.acknowledgeBy,
+    acknowledgedAt: row.acknowledgedAt,
+    createdAt: row.createdAt,
+    client: { name: row.clientName, email: row.clientEmail, phone: row.clientPhone },
+  }));
+}
+
+/**
+ * Confirms the matter is picked up.
+ *
+ * Guarded on `assigned`, so acknowledging a matter that was escalated out from under
+ * the professional does nothing — the escalation already moved it, and letting a late
+ * acknowledgement resurrect it would leave admin reassigning work someone has started.
+ */
+export async function acknowledge(
+  actor: Actor,
+  assignmentId: string,
+): Promise<{ reference: string }> {
+  authorize(actor, "assignment.acknowledge", { minimumRole: "professional" });
+  const professional = await professionalFor(actor);
+
+  return db.transaction(async (tx) => {
+    const [claimed] = await tx
+      .update(assignments)
+      .set({ status: "acknowledged", acknowledgedAt: new Date() })
+      .where(
+        and(
+          eq(assignments.id, assignmentId),
+          eq(assignments.professionalId, professional.id),
+          eq(assignments.status, "assigned"),
+        ),
+      )
+      .returning({ orderId: assignments.orderId });
+
+    if (!claimed) {
+      throw new ApiError("conflict", "That matter is no longer waiting to be acknowledged.");
+    }
+
+    const [order] = await tx
+      .update(orders)
+      .set({ status: "in_progress" })
+      .where(and(eq(orders.id, claimed.orderId), eq(orders.status, "assigned")))
+      .returning({ reference: orders.reference });
+
+    const reference = order?.reference ?? "";
+
+    await emit(tx, {
+      name: DOMAIN_EVENTS.ASSIGNMENT_ACKNOWLEDGED,
+      aggregateType: "assignment",
+      aggregateId: assignmentId,
+      payload: { reference, professionalId: professional.id },
+    });
+
+    await recordAudit(
+      {
+        actor,
+        action: "assignment.acknowledged",
+        resourceType: "order",
+        resourceId: reference,
+        metadata: { assignmentId },
+      },
+      tx,
+    );
+
+    return { reference };
+  });
+}
+
+/**
+ * Turning availability on or off.
+ *
+ * Going unavailable does not release matters already held — those are commitments.
+ * Coming back on emits an event that drains the queue of orders parked for want of
+ * supply, so someone waiting is matched immediately rather than on the next tick.
+ */
+export async function setAvailability(
+  actor: Actor,
+  available: boolean,
+): Promise<{ available: boolean }> {
+  authorize(actor, "professional.availability", { minimumRole: "professional" });
+  const professional = await professionalFor(actor);
+
+  await db.transaction(async (tx) => {
+    await tx.update(professionals).set({ available }).where(eq(professionals.id, professional.id));
+
+    if (available) {
+      await emit(tx, {
+        name: DOMAIN_EVENTS.PROFESSIONAL_AVAILABLE,
+        aggregateType: "professional",
+        aggregateId: professional.id,
+        // Availability flips repeatedly, so each change needs its own key.
+        dedupeKey: `${DOMAIN_EVENTS.PROFESSIONAL_AVAILABLE}:${professional.id}:${String(Date.now())}`,
+      });
+    }
+
+    await recordAudit(
+      {
+        actor,
+        action: "professional.availability",
+        resourceType: "professional",
+        resourceId: professional.id,
+        after: { available },
+      },
+      tx,
+    );
+  });
+
+  return { available };
+}
+
+export async function currentLoad(actor: Actor): Promise<{ open: number; capacity: number }> {
+  const professional = await professionalFor(actor);
+
+  const [row] = await db
+    .select({ capacity: professionals.concurrentCapacity })
+    .from(professionals)
+    .where(eq(professionals.id, professional.id))
+    .limit(1);
+
+  const open = await db
+    .select({ id: assignments.id })
+    .from(assignments)
+    .where(
+      and(
+        eq(assignments.professionalId, professional.id),
+        inArray(assignments.status, [...OPEN_ASSIGNMENT_STATUSES]),
+      ),
+    );
+
+  return { open: open.length, capacity: row?.capacity ?? 0 };
+}

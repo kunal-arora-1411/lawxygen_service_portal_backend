@@ -12,6 +12,9 @@ import { authRoutes } from "./modules/auth/routes.js";
 import { catalogueRoutes } from "./modules/catalogue/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes, webhookRoutes } from "./modules/payments/routes.js";
+import { adminRoutes } from "./modules/admin/routes.js";
+import { professionalRoutes } from "./modules/professionals/routes.js";
+import { registerSubscribers } from "./modules/events/subscribers.js";
 
 /**
  * Builds the application.
@@ -20,7 +23,15 @@ import { paymentRoutes, webhookRoutes } from "./modules/payments/routes.js";
  * handlers. Express matches in registration order, so anything mounted after those two
  * is unreachable — every module registers through here rather than on the returned app.
  */
+let subscribersRegistered = false;
+
 export function createApp(mountRoutes?: (app: Express) => void): Express {
+  // Once per process: the registry is module-level, and tests build several apps.
+  if (!subscribersRegistered) {
+    registerSubscribers();
+    subscribersRegistered = true;
+  }
+
   const app = express();
 
   // Behind a proxy in staging and production, so req.ip and secure-cookie detection
@@ -73,6 +84,8 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
   app.use("/catalogue", catalogueRoutes());
   app.use("/orders", orderRoutes());
   app.use("/payments", paymentRoutes());
+  app.use("/pro", professionalRoutes());
+  app.use("/admin", adminRoutes());
 
   mountRoutes?.(app);
 

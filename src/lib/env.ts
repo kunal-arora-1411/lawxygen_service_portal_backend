@@ -38,6 +38,9 @@ const schema = z.object({
 
   // M0 — auth
   SESSION_SECRET: z.string().min(32).optional(),
+
+  /** 32 raw bytes, base64. `openssl rand -base64 32`. Encrypts PAN and bank details. */
+  FIELD_ENCRYPTION_KEY: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
