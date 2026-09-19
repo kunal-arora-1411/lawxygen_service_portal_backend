@@ -54,4 +54,12 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-argument": "off",
     },
   },
+  {
+    // Scripts are run by a person at a terminal and their whole output is the point.
+    // The structured logger is for the server, where something else reads the logs.
+    files: ["scripts/**/*.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 );

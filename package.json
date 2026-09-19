@@ -22,7 +22,8 @@
     "db:seed": "tsx src/db/seed-catalogue.ts",
     "db:studio": "drizzle-kit studio",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test",
-    "db:prepare:test": "tsx scripts/prepare-test-db.ts"
+    "db:prepare:test": "tsx scripts/prepare-test-db.ts",
+    "smoke:razorpay": "tsx scripts/smoke-razorpay.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",

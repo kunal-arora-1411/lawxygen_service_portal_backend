@@ -282,3 +282,80 @@ export function listGatewayPayments(window: { from: Date; to: Date }): Promise<G
   }
   return listImpl(window);
 }
+
+/**
+ * Reading one payment back.
+ *
+ * Used when the browser claims a payment succeeded. The claim itself is worthless —
+ * anyone can post it — but it is a good reason to go and ask.
+ */
+export type FetchGatewayPayment = (paymentId: string) => Promise<GatewayPayment | null>;
+
+const liveFetchPayment: FetchGatewayPayment = async (paymentId) => {
+  const auth = Buffer.from(
+    `${required("RAZORPAY_KEY_ID")}:${required("RAZORPAY_KEY_SECRET")}`,
+  ).toString("base64");
+
+  const res = await fetch(`${API}/payments/${paymentId}`, {
+    headers: { authorization: `Basic ${auth}` },
+  });
+
+  if (res.status === 400 || res.status === 404) return null;
+  if (!res.ok) {
+    throw new ApiError("upstream_failure", "Could not confirm the payment with the gateway.", {
+      cause: new Error(`Razorpay responded ${String(res.status)}: ${await res.text()}`),
+    });
+  }
+
+  const item = (await res.json()) as RazorpayPaymentRow;
+  return {
+    id: item.id,
+    orderId: item.order_id ?? null,
+    amountPaise: item.amount,
+    currency: item.currency,
+    status: item.status,
+    amountRefundedPaise: item.amount_refunded ?? 0,
+    createdAt: new Date(item.created_at * 1000),
+    method: item.method ?? null,
+  };
+};
+
+let fetchPaymentImpl: FetchGatewayPayment = liveFetchPayment;
+
+/** Test seam. Pass undefined to restore the live client. */
+export function setGatewayPaymentFetcher(override: FetchGatewayPayment | undefined): void {
+  fetchPaymentImpl = override ?? liveFetchPayment;
+}
+
+export function fetchGatewayPayment(paymentId: string): Promise<GatewayPayment | null> {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError("upstream_failure", "Payments are not available right now.");
+  }
+  return fetchPaymentImpl(paymentId);
+}
+
+/**
+ * Verifies the signature Checkout hands the browser on success.
+ *
+ * Razorpay signs `<gateway order id>|<payment id>` with the key secret. Checking it
+ * proves the browser is relaying something Razorpay actually said rather than a
+ * fabrication — but it proves nothing about the payment's *state*, which is why the
+ * confirm path goes on to ask the gateway directly. This is a cheap filter in front of
+ * an expensive call, not a substitute for it.
+ */
+export function verifyCheckoutSignature(
+  gatewayOrderId: string,
+  paymentId: string,
+  signature: string,
+): boolean {
+  const secret = env.RAZORPAY_KEY_SECRET;
+  if (!secret) return false;
+
+  const expected = createHmac("sha256", secret)
+    .update(`${gatewayOrderId}|${paymentId}`)
+    .digest("hex");
+
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(signature, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
