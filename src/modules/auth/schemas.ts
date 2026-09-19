@@ -49,5 +49,19 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Enter your password."),
 });
 
+export const otpRequestSchema = z.object({
+  phone: phoneSchema,
+});
+
+export const otpVerifySchema = z.object({
+  challengeId: z.uuid("That sign-in attempt is not valid. Request a new code."),
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, "Enter the six-digit code."),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type OtpRequestInput = z.infer<typeof otpRequestSchema>;
+export type OtpVerifyInput = z.infer<typeof otpVerifySchema>;

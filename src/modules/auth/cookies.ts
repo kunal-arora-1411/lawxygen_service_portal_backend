@@ -45,9 +45,13 @@ export function clearSessionCookie(res: Response): void {
  * cookie-parser types `req.cookies` as `any`, so reading it directly defeats the
  * type-aware lint rules everywhere it is touched. Narrowed once, here.
  */
-export function readSessionCookie(req: Request): string | undefined {
+export function readNamedCookie(req: Request, name: string): string | undefined {
   const jar: unknown = req.cookies;
   if (typeof jar !== "object" || jar === null) return undefined;
-  const value = (jar as Record<string, unknown>)[SESSION_COOKIE];
+  const value = (jar as Record<string, unknown>)[name];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export function readSessionCookie(req: Request): string | undefined {
+  return readNamedCookie(req, SESSION_COOKIE);
 }

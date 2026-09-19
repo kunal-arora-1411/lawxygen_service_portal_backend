@@ -45,6 +45,37 @@ installed on the host and quietly serve the tests the wrong database.
 Entry points must import `./lib/load-env.js` **first**. `env.ts` validates on import, so
 anything loaded before it sees an empty environment and throws.
 
+## Auth endpoints
+
+| Method | Path                      | Notes                                                    |
+| ------ | ------------------------- | -------------------------------------------------------- |
+| POST   | `/auth/register`          | Email + password. Captures phone and WhatsApp consent.   |
+| POST   | `/auth/login`             | Email + password.                                        |
+| POST   | `/auth/otp/request`       | Sends a code. Same response whether the number is known. |
+| POST   | `/auth/otp/verify`        | Signs in, creating the account if the number is new.     |
+| GET    | `/auth/google/start`      | Redirects to Google (PKCE).                              |
+| GET    | `/auth/google/callback`   | Redirects back to the portal.                            |
+| POST   | `/auth/logout`            | Ends this session. Never an error.                       |
+| POST   | `/auth/logout-everywhere` | Ends all of the user's sessions.                         |
+| GET    | `/auth/me`                | The signed-in user.                                      |
+
+The session token is only ever an httpOnly cookie — it is never in a response body.
+
+The two Google routes are browser redirects and so are the only endpoints that do not
+use the response envelope; a browser following a redirect cannot read one. Failures come
+back as `PORTAL_ORIGIN/login?error=...` with `google_denied`, `google_failed`,
+`email_in_use` or `google_unavailable`.
+
+**Google never auto-links to an existing account with the same email.** Whoever controls
+an address at the identity provider would otherwise inherit an account holding legal
+documents and payment history. Carried over from the marketing repo's decision to disable
+Auth.js's `allowDangerousEmailAccountLinking`.
+
+Without an SMS provider configured, local development logs the OTP instead of sending it,
+under `otpCodeForLocalDev` (the logger redacts `*.code`, so the stub uses a different key
+on purpose). Any environment other than local refuses to send rather than logging it —
+an OTP in a production log is an account handed to whoever can read logs.
+
 ## Conventions
 
 These are load-bearing, and most of them exist because something expensive happened once.

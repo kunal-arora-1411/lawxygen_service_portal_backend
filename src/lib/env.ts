@@ -24,6 +24,9 @@ const schema = z.object({
   /** Origin of the portal. Drives CORS. */
   PORTAL_ORIGIN: z.url().default("http://localhost:3000"),
 
+  /** Public origin of this API. Used to build the OAuth redirect URI. */
+  API_ORIGIN: z.url().default("http://localhost:4000"),
+
   /**
    * Cookie scope, e.g. `.lawxygen.in` so the session is visible to both app. and api.
    * Left unset locally, where a host-only cookie on localhost is what we want.
