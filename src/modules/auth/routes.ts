@@ -18,8 +18,16 @@ import {
   startGoogleFlow,
 } from "./google.js";
 import { requestOtp, verifyOtp } from "./otp.js";
+import { completePasswordReset, requestPasswordReset } from "./reset.js";
 import { findUserById, loginWithPassword, registerWithPassword } from "./password.js";
-import { loginSchema, otpRequestSchema, otpVerifySchema, registerSchema } from "./schemas.js";
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  otpRequestSchema,
+  otpVerifySchema,
+  registerSchema,
+  resetPasswordSchema,
+} from "./schemas.js";
 import { revokeAllSessions, revokeSession, type SessionContext } from "./session.js";
 
 /**
@@ -53,6 +61,37 @@ export function authRoutes(): Router {
       const { user, session } = await loginWithPassword(input, contextOf(req));
       setSessionCookie(res, session.token, session.expiresAt);
       return { user };
+    }),
+  );
+
+  /**
+   * Forgotten passwords.
+   *
+   * Both of these answer identically whatever the outcome. "No such account" and
+   * "you are rate limited" each confirm an address exists, and for a platform whose
+   * users are named professionals that is worth having.
+   */
+  router.post(
+    "/password/forgot",
+    handler(async (req) => {
+      const { email } = parse(forgotPasswordSchema, req.body);
+      await requestPasswordReset(email, contextOf(req));
+      return { requested: true };
+    }),
+  );
+
+  /**
+   * Completing a reset signs the user out everywhere, including here — the commonest
+   * real reason for a reset is that somebody else knows the old password. They log in
+   * again afterwards with the new one.
+   */
+  router.post(
+    "/password/reset",
+    handler(async (req, res) => {
+      const { token, password } = parse(resetPasswordSchema, req.body);
+      await completePasswordReset(token, password, contextOf(req));
+      clearSessionCookie(res);
+      return { reset: true };
     }),
   );
 

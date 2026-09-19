@@ -31,6 +31,14 @@ export const passwordSchema = z
   .min(10, "Use at least 10 characters.")
   .max(128, "Use at most 128 characters.");
 
+export const forgotPasswordSchema = z.object({ email: emailSchema });
+
+export const resetPasswordSchema = z.object({
+  /** 32 bytes hex from `generateToken`. Bounded so a huge body is rejected early. */
+  token: z.string().trim().min(16).max(256),
+  password: passwordSchema,
+});
+
 export const registerSchema = z.object({
   name: z.string().trim().min(1, "Tell us your name.").max(120),
   email: emailSchema,
