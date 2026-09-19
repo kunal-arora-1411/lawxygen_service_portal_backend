@@ -351,8 +351,29 @@ suite("concurrency", () => {
     const references: string[] = [];
     for (let i = 0; i < 10; i += 1) references.push(await payForService(cookie));
 
-    // Ten assignment events, dispatched concurrently.
+    // Ten assignment events, dispatched concurrently. This burst is the point — it is
+    // what forces several assigners at the same small pool at the same moment.
     await Promise.all(Array.from({ length: 4 }, () => dispatchPending()));
+
+    /**
+     * Then drain to empty.
+     *
+     * Four concurrent passes are not a guarantee that every event was handled: a
+     * dispatcher that finds the queue momentarily empty returns while another is
+     * still working, and an event whose handler failed goes into backoff rather than
+     * being retried inside this test. Asserting straight after the burst made the
+     * test depend on timing rather than behaviour — it failed intermittently with one
+     * order still `paid`.
+     */
+    for (let pass = 0; pass < 10; pass += 1) {
+      if ((await dispatchPending()) === 0) break;
+    }
+
+    // Nothing may have failed quietly on the way. An event sitting in backoff with an
+    // error is the case that would otherwise look identical to a slow dispatch.
+    const stuck = await sql!`select name, attempts, last_error from outbox_events
+                             where last_error is not null or status = 'dead'`;
+    expect(stuck, "no outbox event should have errored").toEqual([]);
 
     const counts = await sql!`
       select professional_id, count(*)::int as open

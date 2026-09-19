@@ -172,51 +172,94 @@ export async function assignOrder(orderId: string): Promise<AssignOutcome> {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * Picks and locks the least-loaded eligible professional.
+ * Picks and locks an eligible professional who genuinely has capacity.
  *
- * `FOR UPDATE OF p SKIP LOCKED` is the whole mechanism. Concurrent captures each lock a
- * *different* candidate row instead of queueing behind the same one, so N simultaneous
- * payments fan out across the pool rather than serialising — and no professional can be
- * counted as having spare capacity by two assigners at once.
+ * **Two statements, and it has to be two.** The obvious single query — filter on a
+ * `count(*)` over `assignments` inside a `SELECT … FOR UPDATE SKIP LOCKED` — looks
+ * airtight and lets capacity be exceeded under load. It did, here: a professional
+ * capped at two picked up three.
  *
- * Load is counted from `assignments` rather than kept as a column on the professional.
- * A denormalised counter has to be decremented on every exit path — completed,
- * declined, revoked, escalated — and the day one of those is missed, a professional
- * silently stops receiving work. Counting is slower and cannot drift.
+ * The reason is what the row lock actually protects. Under READ COMMITTED, when a
+ * locked row turns out to have been updated by a transaction that committed after
+ * this statement's snapshot, PostgreSQL runs an EvalPlanQual recheck — but that
+ * re-evaluates the qual against the latest version of *the locked row*. A subquery
+ * counting a different table is still answered from the original snapshot. So a
+ * transaction whose snapshot predates a just-committed assignment can lock the
+ * professional, pass the recheck, and add one more on top of a full workload.
+ *
+ * So: lock first, then count in a **separate statement**, which under READ COMMITTED
+ * takes a fresh snapshot and sees every committed assignment. Holding the lock is
+ * what makes that count stable — every other claimer must take the same lock — so
+ * once it says there is room, there is room.
+ *
+ * The count filter stays in the first query as a cheap pre-filter. It is a hint for
+ * ordering, not the guarantee.
+ *
+ * Load is counted rather than kept as a column, because a denormalised counter has to
+ * be decremented on every exit path — completed, declined, revoked, escalated — and
+ * the day one is missed a professional silently stops receiving work.
  *
  * `payout_identities` is required: a verified professional who never completed payout
- * onboarding cannot be paid, so assigning them creates work nobody can settle. This is
- * the reverse one-to-one whose nullability Drizzle's `one()` infers wrongly, which is
- * exactly why it is filtered in SQL here.
+ * onboarding cannot be paid, so assigning them creates work nobody can settle.
  */
 async function claimProfessional(tx: Tx, categoryId: string): Promise<string | undefined> {
   const open = OPEN_ASSIGNMENT_STATUSES.map((s) => `'${s}'`).join(", ");
+  const rejected: string[] = [];
 
-  const rows = await tx.execute<{ id: string }>(sql`
-    SELECT p.id
-    FROM ${professionals} p
-    JOIN professional_categories pc
-      ON pc.professional_id = p.id AND pc.category_id = ${categoryId}
-    JOIN ${payoutIdentities} pi ON pi.professional_id = p.id
-    WHERE p.status = 'verified'
-      AND p.available
-      AND (
-        SELECT count(*) FROM ${assignments} a
-        WHERE a.professional_id = p.id
-          AND a.status IN (${sql.raw(open)})
-      ) < p.concurrent_capacity
-    ORDER BY (
-        SELECT count(*) FROM ${assignments} a
-        WHERE a.professional_id = p.id
-          AND a.status IN (${sql.raw(open)})
-      ) ASC,
-      p.last_assigned_at ASC NULLS FIRST,
-      p.id ASC
-    FOR UPDATE OF p SKIP LOCKED
-    LIMIT 1
-  `);
+  // Bounded: each pass either claims somebody or rules one candidate out, and the
+  // pool a single order can reasonably work through is small.
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const candidates = await tx.execute<{ id: string }>(sql`
+      SELECT p.id
+      FROM ${professionals} p
+      JOIN professional_categories pc
+        ON pc.professional_id = p.id AND pc.category_id = ${categoryId}
+      JOIN ${payoutIdentities} pi ON pi.professional_id = p.id
+      WHERE p.status = 'verified'
+        AND p.available
+        ${rejected.length ? sql`AND p.id <> ALL(${rejected}::uuid[])` : sql``}
+        AND (
+          SELECT count(*) FROM ${assignments} a
+          WHERE a.professional_id = p.id
+            AND a.status IN (${sql.raw(open)})
+        ) < p.concurrent_capacity
+      ORDER BY (
+          SELECT count(*) FROM ${assignments} a
+          WHERE a.professional_id = p.id
+            AND a.status IN (${sql.raw(open)})
+        ) ASC,
+        p.last_assigned_at ASC NULLS FIRST,
+        p.id ASC
+      FOR UPDATE OF p SKIP LOCKED
+      LIMIT 1
+    `);
 
-  return rows[0]?.id;
+    const candidate = candidates[0]?.id;
+    if (!candidate) return undefined;
+
+    // Fresh snapshot, taken while holding the lock. This is the actual check.
+    const [verified] = await tx
+      .select({
+        open: sql<number>`(
+          SELECT count(*) FROM ${assignments} a
+          WHERE a.professional_id = ${candidate}
+            AND a.status IN (${sql.raw(open)})
+        )::int`,
+        capacity: professionals.concurrentCapacity,
+      })
+      .from(professionals)
+      .where(eq(professionals.id, candidate))
+      .limit(1);
+
+    if (verified && verified.open < verified.capacity) return candidate;
+
+    // Full after all. Rule them out and look at the next one; the lock is held until
+    // this transaction ends, which is correct — they have no room either way.
+    rejected.push(candidate);
+  }
+
+  logger.warn({ categoryId }, "gave up looking for a professional with spare capacity");
+  return undefined;
 }
 
 async function nextAttemptNumber(tx: Tx, orderId: string): Promise<number> {

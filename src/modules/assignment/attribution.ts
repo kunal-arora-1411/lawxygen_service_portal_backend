@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db } from "../../db/client.js";
+import type { db } from "../../db/client.js";
 import { assignments, orders } from "../../db/schema/index.js";
 import { deriveAmounts } from "../../lib/money.js";
 import { ACCOUNTS, postEntry } from "../payments/ledger.js";
