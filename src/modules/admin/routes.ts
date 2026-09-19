@@ -14,7 +14,15 @@ import {
   suspendSchema,
   updateServiceSchema,
 } from "./schemas.js";
-import { reassignOrder, suspendProfessional, verifyProfessional } from "./service.js";
+import {
+  reassignOrder,
+  reinstateProfessional,
+  rejectProfessional,
+  suspendProfessional,
+  verifyProfessional,
+} from "./service.js";
+import { reviewApplication } from "../professionals/onboarding.js";
+import { rejectSchema } from "../professionals/schemas.js";
 import { draftBatch, listBatches, payableBalances, releaseBatch } from "../payouts/service.js";
 import { refundOrder } from "../payments/refund.js";
 import { recentRuns, runReconciliation } from "../payments/reconciliation.js";
@@ -84,11 +92,39 @@ export function adminRoutes(): Router {
     }),
   );
 
+  /** The whole application: categories, registration numbers, payout details present. */
+  router.get(
+    "/professionals/:id",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      return reviewApplication(actorOf(req), id);
+    }),
+  );
+
   router.post(
     "/professionals/:id/verify",
     handler(async (req) => {
       const { id } = parse(z.object({ id: z.uuid() }), req.params);
       return verifyProfessional(actorOf(req), id);
+    }),
+  );
+
+  router.post(
+    "/professionals/:id/reject",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      const { reason } = parse(rejectSchema, req.body);
+      await rejectProfessional(actorOf(req), id, reason);
+      return { rejected: true };
+    }),
+  );
+
+  router.post(
+    "/professionals/:id/reinstate",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      await reinstateProfessional(actorOf(req), id);
+      return { reinstated: true };
     }),
   );
 

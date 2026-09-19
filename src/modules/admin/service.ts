@@ -1,6 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { assignments, DOMAIN_EVENTS, orders, professionals } from "../../db/schema/index.js";
+import {
+  assignments,
+  DOMAIN_EVENTS,
+  orders,
+  professionalCredentials,
+  professionals,
+} from "../../db/schema/index.js";
 import { ApiError } from "../../lib/api.js";
 import { recordAudit } from "../../lib/auth/audit.js";
 import { authorize, type Actor } from "../../lib/auth/policy.js";
@@ -24,13 +30,42 @@ export async function verifyProfessional(
   authorize(actor, "professional.verify", { minimumRole: "admin" });
 
   return db.transaction(async (tx) => {
+    /**
+     * Only an application that was actually submitted. Verifying a draft would approve
+     * somebody mid-way through filling the form — before they have confirmed the
+     * details are final, and possibly before they have a payout identity, which the
+     * eligibility query would then have to keep excluding.
+     *
+     * Reinstating a suspended professional is `reinstateProfessional`, not this.
+     */
     const [updated] = await tx
       .update(professionals)
       .set({ status: "verified", verifiedAt: new Date() })
-      .where(eq(professionals.id, professionalId))
+      .where(and(eq(professionals.id, professionalId), eq(professionals.status, "pending_review")))
       .returning({ id: professionals.id, status: professionals.status });
 
-    if (!updated) throw new ApiError("not_found", "No such professional.");
+    if (!updated) {
+      const [exists] = await tx
+        .select({ status: professionals.status })
+        .from(professionals)
+        .where(eq(professionals.id, professionalId))
+        .limit(1);
+
+      if (!exists) throw new ApiError("not_found", "No such professional.");
+      throw new ApiError("conflict", `That application is ${exists.status}, not awaiting review.`);
+    }
+
+    // The registration numbers were the thing being reviewed. Approving the person
+    // approves what they submitted, or the credential list stays "submitted" forever.
+    await tx
+      .update(professionalCredentials)
+      .set({ status: "verified", reviewedBy: actor.userId, reviewedAt: new Date() })
+      .where(
+        and(
+          eq(professionalCredentials.professionalId, professionalId),
+          eq(professionalCredentials.status, "submitted"),
+        ),
+      );
 
     await emit(tx, {
       name: DOMAIN_EVENTS.PROFESSIONAL_APPROVED,
@@ -50,6 +85,91 @@ export async function verifyProfessional(
     );
 
     return { status: updated.status };
+  });
+}
+
+/**
+ * Turning an application down.
+ *
+ * The reason is stored on every credential rather than only in the audit log, because
+ * the applicant has to see it — a rejection they cannot read is a support ticket. They
+ * can correct and resubmit, because a rejected application is editable again.
+ */
+export async function rejectProfessional(
+  actor: Actor,
+  professionalId: string,
+  reason: string,
+): Promise<void> {
+  authorize(actor, "professional.verify", { minimumRole: "admin" });
+
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(professionals)
+      .set({ status: "rejected", available: false })
+      .where(and(eq(professionals.id, professionalId), eq(professionals.status, "pending_review")))
+      .returning({ id: professionals.id });
+
+    if (!updated) throw new ApiError("conflict", "That application is not awaiting review.");
+
+    await tx
+      .update(professionalCredentials)
+      .set({
+        status: "rejected",
+        reviewedBy: actor.userId,
+        reviewedAt: new Date(),
+        reviewNote: reason,
+      })
+      .where(eq(professionalCredentials.professionalId, professionalId));
+
+    await recordAudit(
+      {
+        actor,
+        action: "professional.rejected",
+        resourceType: "professional",
+        resourceId: professionalId,
+        after: { status: "rejected" },
+        metadata: { reason },
+      },
+      tx,
+    );
+  });
+}
+
+/**
+ * Putting a suspended professional back.
+ *
+ * Separate from verification because it is a different decision about a different
+ * person: one is "are these credentials real", the other is "is this behaviour
+ * resolved". It emits the same approval event so the parked queue drains.
+ */
+export async function reinstateProfessional(actor: Actor, professionalId: string): Promise<void> {
+  authorize(actor, "professional.verify", { minimumRole: "admin" });
+
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(professionals)
+      .set({ status: "verified" })
+      .where(and(eq(professionals.id, professionalId), eq(professionals.status, "suspended")))
+      .returning({ id: professionals.id });
+
+    if (!updated) throw new ApiError("conflict", "That professional is not suspended.");
+
+    await emit(tx, {
+      name: DOMAIN_EVENTS.PROFESSIONAL_APPROVED,
+      aggregateType: "professional",
+      aggregateId: professionalId,
+    });
+
+    await recordAudit(
+      {
+        actor,
+        action: "professional.reinstated",
+        resourceType: "professional",
+        resourceId: professionalId,
+        after: { status: "verified" },
+      },
+      tx,
+    );
   });
 }
 

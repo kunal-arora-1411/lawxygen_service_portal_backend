@@ -1,7 +1,23 @@
 import { Router } from "express";
 import { z } from "zod";
 import { handler, parse } from "../../lib/http.js";
-import { actorOf, requireRole } from "../auth/middleware.js";
+import { actorOf, requireAuth, requireRole } from "../auth/middleware.js";
+import {
+  addCredential,
+  applyAsProfessional,
+  myApplication,
+  removeCredential,
+  savePayoutIdentity,
+  submitForReview,
+  updateApplication,
+  withdrawFromReview,
+} from "./onboarding.js";
+import {
+  applySchema,
+  credentialSchema,
+  payoutIdentitySchema,
+  updateProfileSchema,
+} from "./schemas.js";
 import {
   acknowledge,
   advanceMatter,
@@ -14,7 +30,64 @@ import {
 
 export function professionalRoutes(): Router {
   const router = Router();
+
+  /**
+   * Applying is the one thing here a client may do, because until they have applied
+   * they are not a professional. Everything after it sits behind the role, which
+   * applying grants — resolveSession reads the role fresh on each request, so the very
+   * next call is already through.
+   */
+  router.post(
+    "/apply",
+    requireAuth,
+    handler(async (req) => applyAsProfessional(actorOf(req), parse(applySchema, req.body)), 201),
+  );
+
   router.use(requireRole("professional"));
+
+  // --------------------------------------------------------------- onboarding
+
+  router.get(
+    "/application",
+    handler((req) => myApplication(actorOf(req))),
+  );
+
+  router.patch(
+    "/application",
+    handler(async (req) => updateApplication(actorOf(req), parse(updateProfileSchema, req.body))),
+  );
+
+  router.post(
+    "/application/credentials",
+    handler(async (req) => addCredential(actorOf(req), parse(credentialSchema, req.body)), 201),
+  );
+
+  router.delete(
+    "/application/credentials/:id",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      await removeCredential(actorOf(req), id);
+      return { removed: true };
+    }),
+  );
+
+  /** Encrypted on the way in. Nothing here ever comes back out in the clear. */
+  router.put(
+    "/application/payout-identity",
+    handler(async (req) => savePayoutIdentity(actorOf(req), parse(payoutIdentitySchema, req.body))),
+  );
+
+  router.post(
+    "/application/submit",
+    handler((req) => submitForReview(actorOf(req))),
+  );
+
+  router.post(
+    "/application/withdraw",
+    handler((req) => withdrawFromReview(actorOf(req))),
+  );
+
+  // ------------------------------------------------------------------ matters
 
   router.get(
     "/matters",
