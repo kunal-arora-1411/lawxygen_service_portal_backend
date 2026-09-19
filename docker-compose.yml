@@ -1,0 +1,37 @@
+# Local development database.
+#
+# Production is Neon. This exists so the integration tests and local development have a
+# real PostgreSQL to run against — they assert on partial unique indexes, cascade
+# behaviour and SQLSTATE codes, none of which a fake would reproduce.
+#
+#   docker compose up -d
+#   npm run db:migrate
+#   npm test
+#
+# Port 5433, not 5432, so it cannot collide with a PostgreSQL already installed on the
+# host and quietly run the tests against the wrong database.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: lawxygen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lawxygen
+      POSTGRES_PASSWORD: lawxygen_local_only
+      POSTGRES_DB: lawxygen
+    ports:
+      - "5433:5432"
+    volumes:
+      # Postgres 18+ stores data in a major-version subdirectory so that pg_upgrade
+      # --link works without crossing a mount boundary. Mounting the old
+      # /var/lib/postgresql/data path makes the image refuse to start.
+      - lawxygen_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lawxygen -d lawxygen"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  lawxygen_pgdata:

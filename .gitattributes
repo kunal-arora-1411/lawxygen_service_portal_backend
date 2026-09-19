@@ -1,0 +1,10 @@
+# Normalise line endings to LF in the repository and in every working copy.
+#
+# Without this, a Windows checkout rewrites files to CRLF, Prettier (which defaults to
+# LF) then reports every file as unformatted, and `npm run format:check` fails in CI on
+# a machine that has changed nothing.
+* text=auto eol=lf
+
+# Generated; keep diffs collapsed in reviews.
+package-lock.json linguist-generated=true -diff
+src/db/migrations/meta/*.json linguist-generated=true -diff

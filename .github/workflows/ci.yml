@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      NODE_ENV: test
+      APP_ENV: local
+      PORTAL_ORIGIN: http://localhost:3000
+      # No DATABASE_URL: integration tests self-skip and the unit suite needs no
+      # credentials. The database client connects lazily precisely so this works.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test
+      - run: npm run build
+
+      # Schema drift guard. `generate` diffs the Drizzle schema against the migrations
+      # committed to the repo; if it writes a file, someone changed the schema without
+      # generating the migration, and the next deploy would run against a table shape
+      # that does not exist.
+      - name: Assert no uncommitted schema changes
+        run: |
+          npx drizzle-kit generate --name=ci_drift_check
+          if [ -n "$(git status --porcelain src/db/migrations)" ]; then
+            echo "::error::Schema changed without a migration. Run: npm run db:generate"
+            git status --porcelain src/db/migrations
+            exit 1
+          fi
