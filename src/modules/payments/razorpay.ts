@@ -132,3 +132,58 @@ export function parseWebhook(rawBody: Buffer): RazorpayWebhook {
   }
   return body;
 }
+
+/**
+ * Refunding a captured payment.
+ *
+ * Called before the ledger is touched: journalling a refund the gateway never accepted
+ * would have the books claim money went back when it did not.
+ */
+export type RefundResult = { providerRef: string };
+
+export type SendRefund = (input: {
+  providerPaymentId: string;
+  amountPaise: number;
+  reason: string;
+}) => Promise<RefundResult>;
+
+const liveRefund: SendRefund = async (input) => {
+  const auth = Buffer.from(
+    `${required("RAZORPAY_KEY_ID")}:${required("RAZORPAY_KEY_SECRET")}`,
+  ).toString("base64");
+
+  const res = await fetch(`${API}/payments/${input.providerPaymentId}/refund`, {
+    method: "POST",
+    headers: { authorization: `Basic ${auth}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      amount: input.amountPaise,
+      // Razorpay dedupes on this, so the same approval retried does not refund twice.
+      notes: { reason: input.reason },
+      speed: "normal",
+    }),
+  });
+
+  if (!res.ok) {
+    throw new ApiError("upstream_failure", "The gateway refused the refund.", {
+      cause: new Error(`Razorpay responded ${String(res.status)}: ${await res.text()}`),
+    });
+  }
+
+  const body = (await res.json()) as { id?: string };
+  if (!body.id) throw new ApiError("upstream_failure", "The gateway refused the refund.");
+  return { providerRef: body.id };
+};
+
+let refundImpl: SendRefund = liveRefund;
+
+/** Test seam. Pass undefined to restore the live client. */
+export function setRefundSender(override: SendRefund | undefined): void {
+  refundImpl = override ?? liveRefund;
+}
+
+export function sendRefund(input: Parameters<SendRefund>[0]): Promise<RefundResult> {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError("upstream_failure", "Refunds are not available right now.");
+  }
+  return refundImpl(input);
+}

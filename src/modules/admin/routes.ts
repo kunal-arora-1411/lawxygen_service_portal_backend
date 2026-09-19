@@ -16,6 +16,7 @@ import {
 } from "./schemas.js";
 import { reassignOrder, suspendProfessional, verifyProfessional } from "./service.js";
 import { draftBatch, listBatches, payableBalances, releaseBatch } from "../payouts/service.js";
+import { refundOrder } from "../payments/refund.js";
 
 export function adminRoutes(): Router {
   const router = Router();
@@ -120,6 +121,16 @@ export function adminRoutes(): Router {
       const { reference } = parse(orderReferenceSchema, req.params);
       const { reason } = parse(suspendSchema, req.body);
       return reassignOrder(actorOf(req), reference, reason);
+    }),
+  );
+
+  /** Full refunds only — a partial one changes GST, commission and the share at once. */
+  router.post(
+    "/orders/:reference/refund",
+    handler(async (req) => {
+      const { reference } = parse(orderReferenceSchema, req.params);
+      const { reason } = parse(suspendSchema, req.body);
+      return refundOrder(actorOf(req), reference, reason);
     }),
   );
 
