@@ -9,6 +9,8 @@ import { errorHandler, handler, notFoundHandler } from "./lib/http.js";
 import { logger } from "./lib/logger.js";
 import { attachActor } from "./modules/auth/middleware.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { catalogueRoutes } from "./modules/catalogue/routes.js";
+import { orderRoutes } from "./modules/orders/routes.js";
 
 /**
  * Builds the application.
@@ -59,6 +61,8 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
   );
 
   app.use("/auth", authRoutes());
+  app.use("/catalogue", catalogueRoutes());
+  app.use("/orders", orderRoutes());
 
   mountRoutes?.(app);
 

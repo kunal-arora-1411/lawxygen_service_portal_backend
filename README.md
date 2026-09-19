@@ -76,6 +76,41 @@ under `otpCodeForLocalDev` (the logger redacts `*.code`, so the stub uses a diff
 on purpose). Any environment other than local refuses to send rather than logging it —
 an OTP in a production log is an account handed to whoever can read logs.
 
+## Catalogue and orders
+
+| Method | Path                                  | Notes                                                       |
+| ------ | ------------------------------------- | ----------------------------------------------------------- |
+| GET    | `/catalogue/categories`               | All ten, in marketing order, with sellable counts. Public.  |
+| GET    | `/catalogue/services`                 | `?category=&q=&featured=&cursor=&limit=`. Public.           |
+| GET    | `/catalogue/services/:category/:slug` | Public.                                                     |
+| POST   | `/orders`                             | `{ category, service }`. Creates a `payment_pending` order. |
+| GET    | `/orders`                             | The caller's own orders, newest first.                      |
+| GET    | `/orders/:reference`                  | e.g. `LX-000142`.                                           |
+
+**The catalogue stores pricing, not content.** The 259 pages on lawxygen.in keep the
+organic search value and are not migrated. `npm run db:seed` imports the sellable
+catalogue from `../LAWXYGEN_AGAIN_NEW_UI/data/serviceCatalog.ts`, reusing that repo's
+`serviceSlug()` so the two agree. It is idempotent, and it never overwrites price,
+turnaround, `active` or `featured` — those belong to admin.
+
+**Services are keyed on `(category, slug)`, never slug alone.** 259 services produce
+only 237 distinct slugs: 22 appear in two categories at once, always a done-for-you
+filing that also exists as a `talk-*` consultation. `gst-audit-support` is both. They are
+different products at different prices, distinguished by `fulfilment_type`, and a unique
+index on slug alone would reject 44 rows.
+
+**Seeded rows start inactive**, and the `services_priced_when_active` CHECK means a
+service cannot be published without a price and a turnaround. A forgotten price is a
+database error rather than a checkout showing ₹0.
+
+**An order snapshots what was sold.** Title, price, currency and turnaround are copied
+onto the order, not referenced. Repricing the catalogue tomorrow must not change what a
+client agreed to pay today, because the invoice and the ledger both key off it.
+
+**Asking for someone else's order returns `not_found`, not `forbidden`.** References are
+sequential, so a 403 would confirm the reference exists and let anyone count the
+platform's orders by walking upwards from `LX-000001`.
+
 ## Conventions
 
 These are load-bearing, and most of them exist because something expensive happened once.
@@ -95,6 +130,11 @@ pagination onto a client that assumed a bare array means editing every call site
 SQLSTATE lives on `error.cause`. Use `pgErrorCode()`, `isUniqueViolation()` and
 `isExclusionViolation()` from `src/lib/db-errors.ts`. A naive `error.code === "23505"`
 compiles, reads correctly, and silently never matches.
+
+**Never select a column through `sql<T>`.** It is an unchecked assertion that also
+bypasses Drizzle's column mapping, so a `bigint` selected as `sql<number>` arrives as
+the string `"249900"` while the type says `number`. Select the column; narrow in code.
+Same failure shape as the one above, and it cost a debugging session here already.
 
 **Money is integer paise.** Never floating point, and always with its currency.
 
