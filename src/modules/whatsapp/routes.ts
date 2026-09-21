@@ -16,6 +16,14 @@ import { actorOf, requireRole } from "../auth/middleware.js";
 import { isConfigured } from "./client.js";
 import { sendTemplateMessage } from "./send.js";
 import {
+  assignableMembers,
+  listConversations,
+  listMessages,
+  replyWithText,
+  unassignedCount,
+  updateConversation,
+} from "./conversations.js";
+import {
   checkTemplate,
   createTemplate,
   listTemplates,
@@ -217,7 +225,66 @@ function whatsappRoutes(minimumRole: "admin" | "professional"): Router {
     }),
   );
 
+  // ------------------------------------------------------------- conversations
+
+  /**
+   * The thread list. An admin sees every conversation; a professional sees only the
+   * clients on matters they currently hold — the filter lives in the service, because
+   * a route guard is a convenience and never the boundary.
+   */
+  router.get(
+    "/conversations",
+    handler((req) => listConversations(actorOf(req))),
+  );
+
+  router.get(
+    "/conversations/:id/messages",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      return listMessages(actorOf(req), id);
+    }),
+  );
+
+  /**
+   * A free-form reply. Only possible inside the 24-hour window the client opened by
+   * writing to us; outside it this refuses and the caller sends a template instead.
+   */
+  router.post(
+    "/conversations/:id/messages",
+    handler(async (req) => {
+      const { id } = parse(z.object({ id: z.uuid() }), req.params);
+      const { text } = parse(z.object({ text: z.string().trim().min(1).max(4096) }), req.body);
+      return replyWithText(actorOf(req), id, text);
+    }, 201),
+  );
+
   if (minimumRole === "admin") {
+    /** Who a thread can be handed to. */
+    router.get(
+      "/members",
+      handler((req) => assignableMembers(actorOf(req))),
+    );
+
+    router.get(
+      "/conversations/unassigned/count",
+      handler(async (req) => ({ count: await unassignedCount(actorOf(req)) })),
+    );
+
+    router.patch(
+      "/conversations/:id",
+      handler(async (req) => {
+        const { id } = parse(z.object({ id: z.uuid() }), req.params);
+        const { action, assigneeUserId } = parse(
+          z.object({
+            action: z.enum(["assign", "takeover", "resolve", "reopen"]),
+            assigneeUserId: z.uuid().optional(),
+          }),
+          req.body,
+        );
+        return updateConversation(actorOf(req), id, action, assigneeUserId);
+      }),
+    );
+
     router.post(
       "/templates/sync",
       handler((req) => syncTemplates(actorOf(req))),

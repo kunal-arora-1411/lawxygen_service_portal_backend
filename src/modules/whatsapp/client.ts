@@ -44,12 +44,19 @@ export type MetaTemplate = {
  * number from the pool table rather than the environment — both want one place to
  * change.
  */
-type WhatsappConfig = { phoneNumberId?: string; accessToken?: string; wabaId?: string };
+type WhatsappConfig = {
+  phoneNumberId?: string;
+  accessToken?: string;
+  wabaId?: string;
+  /** Verifies inbound webhook signatures. */
+  appSecret?: string;
+};
 
 let config: WhatsappConfig = {
   ...(env.WHATSAPP_PHONE_NUMBER_ID ? { phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID } : {}),
   ...(env.WHATSAPP_ACCESS_TOKEN ? { accessToken: env.WHATSAPP_ACCESS_TOKEN } : {}),
   ...(env.WHATSAPP_WABA_ID ? { wabaId: env.WHATSAPP_WABA_ID } : {}),
+  ...(env.WHATSAPP_APP_SECRET ? { appSecret: env.WHATSAPP_APP_SECRET } : {}),
 };
 
 /** Test seam. Pass undefined to restore whatever the environment says. */
@@ -58,8 +65,11 @@ export function setWhatsappConfig(override: WhatsappConfig | undefined): void {
     ...(env.WHATSAPP_PHONE_NUMBER_ID ? { phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID } : {}),
     ...(env.WHATSAPP_ACCESS_TOKEN ? { accessToken: env.WHATSAPP_ACCESS_TOKEN } : {}),
     ...(env.WHATSAPP_WABA_ID ? { wabaId: env.WHATSAPP_WABA_ID } : {}),
+    ...(env.WHATSAPP_APP_SECRET ? { appSecret: env.WHATSAPP_APP_SECRET } : {}),
+    ...(env.WHATSAPP_APP_SECRET ? { appSecret: env.WHATSAPP_APP_SECRET } : {}),
   };
   sender = undefined;
+  freeTextSender = undefined;
 }
 
 export function isConfigured(): boolean {
@@ -72,6 +82,11 @@ export function senderNumberId(): string {
     throw new ApiError("upstream_failure", "No WhatsApp number is configured.");
   }
   return config.phoneNumberId;
+}
+
+/** The secret Meta signs inbound webhooks with. */
+export function webhookSecret(): string | undefined {
+  return config.appSecret;
 }
 
 /** The WABA a cooldown should be scoped to, falling back to the number. */
@@ -230,4 +245,60 @@ export function submitTemplate(payload: Record<string, unknown>): Promise<Submit
 /** Test seam. Pass undefined to restore the live client. */
 export function setTemplateSubmitter(override: TemplateSubmitter | undefined): void {
   submitter = override ?? liveSubmit;
+}
+
+/**
+ * A free-form text reply.
+ *
+ * Only legal inside the 24-hour window a client opens by writing to us; the caller
+ * checks that before getting here. Meta would reject it anyway, but its error says
+ * little and costs a round trip.
+ */
+export type FreeTextSend = { recipientPhone: string; text: string; correlationId: string };
+
+export type FreeTextSender = (input: FreeTextSend) => Promise<SendResult>;
+
+const liveFreeText: FreeTextSender = async (input) => {
+  const response = await graphPost(`${senderNumberId()}/messages`, token(), {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: input.recipientPhone.replace(/D/g, ""),
+    type: "text",
+    text: { preview_url: false, body: input.text },
+    biz_opaque_callback_data: input.correlationId,
+  });
+
+  const metaMessageId = (response as { messages?: { id?: string }[] }).messages?.[0]?.id;
+  if (!metaMessageId) {
+    throw new ApiError("upstream_failure", "Meta accepted the message without returning an id.");
+  }
+  return { metaMessageId };
+};
+
+const logOnlyFreeText: FreeTextSender = (input) => {
+  logger.warn(
+    { to: input.recipientPhone, bodyForLocalDev: input.text, channel: "whatsapp-stub" },
+    "WHATSAPP NOT SENT — no number configured; the reply is below",
+  );
+  return Promise.resolve({ metaMessageId: `stub_${input.correlationId}` });
+};
+
+function configuredFreeTextSender(): FreeTextSender {
+  if (isConfigured()) return liveFreeText;
+  if (env.APP_ENV === "local") return logOnlyFreeText;
+  return () => {
+    throw new ApiError("upstream_failure", "WhatsApp is not available right now.");
+  };
+}
+
+let freeTextSender: FreeTextSender | undefined;
+
+export function sendFreeText(input: FreeTextSend): Promise<SendResult> {
+  freeTextSender ??= configuredFreeTextSender();
+  return freeTextSender(input);
+}
+
+/** Test seam. Pass undefined to restore the configured sender. */
+export function setFreeTextSender(override: FreeTextSender | undefined): void {
+  freeTextSender = override ?? configuredFreeTextSender();
 }

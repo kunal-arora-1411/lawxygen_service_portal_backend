@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -15,9 +16,9 @@ import { users } from "./auth.js";
 /**
  * WhatsApp.
  *
- * Phase A is outbound only: approved templates, sent through Meta's Cloud API. There
- * are no conversations or inbound messages yet — those arrive in Phase B, along with
- * the 24-hour reply window that governs free-form replies.
+ * Templates go out through Meta's Cloud API; inbound messages arrive by webhook and
+ * land in a conversation. Free-form replies are only possible inside the 24-hour
+ * window a client opens by writing to us.
  *
  * Two rules from Meta shape everything here, and both cost money to get wrong:
  *
@@ -206,3 +207,118 @@ export type WhatsappTemplate = typeof whatsappTemplates.$inferSelect;
 export type WhatsappSendAttempt = typeof whatsappSendAttempts.$inferSelect;
 export type WhatsappTemplateStatus = (typeof whatsappTemplateStatusEnum.enumValues)[number];
 export type WhatsappTemplateCategory = (typeof whatsappTemplateCategoryEnum.enumValues)[number];
+
+/**
+ * A WhatsApp thread.
+ *
+ * **Keyed on the number and the contact, never the contact alone.** WhatsApp gives one
+ * thread per pair of phone numbers, so that pair is the natural identity. It is also
+ * what makes the planned pool of five or six numbers a no-migration change: a number
+ * allocated per active matter simply produces a different conversation row, and two
+ * professionals never end up looking at the same thread.
+ *
+ * `userId` is nullable because a message can arrive from a number nobody has
+ * registered with. Dropping it would lose a real customer contact; linking it wrongly
+ * would show one client another's thread. So it stays unlinked until the number
+ * matches a registered user.
+ */
+export const whatsappConversationStatusEnum = pgEnum("whatsapp_conversation_status", [
+  "open",
+  "resolved",
+]);
+
+export const whatsappConversations = pgTable(
+  "whatsapp_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    /** Which Lawxygen number this thread runs through. */
+    phoneNumberId: text("phone_number_id").notNull(),
+    /** The client's number, digits only. */
+    contactPhone: text("contact_phone").notNull(),
+    contactName: text("contact_name"),
+
+    /** Set when the number matches a registered user. */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+
+    status: whatsappConversationStatusEnum("status").notNull().default("open"),
+
+    /**
+     * Who is answering. A professional or an admin — both are users, which is why this
+     * is a user reference rather than a professional one.
+     */
+    assignedUserId: uuid("assigned_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
+
+    /**
+     * When the client last wrote. The 24-hour reply window runs from here and from
+     * nowhere else — a template Lawxygen sends does **not** open it.
+     */
+    lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+    unreadCount: integer("unread_count").notNull().default(0),
+
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("whatsapp_conversations_pair_uq").on(t.phoneNumberId, t.contactPhone),
+    index("whatsapp_conversations_user_idx").on(t.userId),
+    index("whatsapp_conversations_assigned_idx").on(t.assignedUserId, t.status),
+    index("whatsapp_conversations_recent_idx").on(t.lastMessageAt),
+  ],
+);
+
+export const whatsappDirectionEnum = pgEnum("whatsapp_direction", ["inbound", "outbound"]);
+
+/**
+ * Every message in a thread, both directions in one table.
+ *
+ * PingMe keeps inbound and outbound apart, which suits a campaign tool. A chat reads
+ * strictly in time order, so one table with a direction saves a union on the hot path
+ * and removes the chance of the two drifting apart.
+ */
+export const whatsappMessages = pgTable(
+  "whatsapp_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => whatsappConversations.id, { onDelete: "cascade" }),
+
+    direction: whatsappDirectionEnum("direction").notNull(),
+    /** Meta's id. Unique, and the reason a redelivered webhook cannot duplicate. */
+    metaMessageId: text("meta_message_id"),
+    /** `text`, `image`, `button`, … Meta's own word for it. */
+    type: text("type").notNull().default("text"),
+    /** The readable part, when there is one. Media lives in `payload`. */
+    body: text("body"),
+    payload: jsonb("payload").notNull().default({}),
+
+    /** For an outbound template, the attempt that produced it. */
+    sendAttemptId: uuid("send_attempt_id").references(() => whatsappSendAttempts.id, {
+      onDelete: "set null",
+    }),
+    /** Who typed it, for a free-form reply. Null for anything automatic. */
+    sentByUserId: uuid("sent_by_user_id").references(() => users.id, { onDelete: "set null" }),
+
+    /** Meta's delivery state: sent, delivered, read, failed. */
+    status: text("status"),
+    failedReason: text("failed_reason"),
+
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Meta redelivers a webhook it thinks was not acknowledged. This is what makes
+    // that harmless.
+    uniqueIndex("whatsapp_messages_meta_id_uq").on(t.metaMessageId),
+    index("whatsapp_messages_thread_idx").on(t.conversationId, t.occurredAt),
+  ],
+);
+
+export type WhatsappConversation = typeof whatsappConversations.$inferSelect;
+export type WhatsappMessage = typeof whatsappMessages.$inferSelect;

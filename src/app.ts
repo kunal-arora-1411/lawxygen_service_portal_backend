@@ -14,6 +14,7 @@ import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes, webhookRoutes } from "./modules/payments/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
 import { adminWhatsappRoutes, professionalWhatsappRoutes } from "./modules/whatsapp/routes.js";
+import { whatsappWebhookRoutes } from "./modules/whatsapp/webhook.js";
 import { professionalRoutes } from "./modules/professionals/routes.js";
 import { registerSubscribers } from "./modules/events/subscribers.js";
 
@@ -53,6 +54,16 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
    * of the JSON parser, and scoped to this one path.
    */
   app.use("/webhooks", express.raw({ type: "*/*", limit: "1mb" }), webhookRoutes());
+  /**
+   * Before `express.json`, deliberately. Meta signs the exact bytes it sent, so the
+   * signature can only be checked against a raw Buffer — a parsed and re-serialised
+   * object fails on nothing worse than a different key order.
+   */
+  app.use(
+    "/webhooks/whatsapp",
+    express.raw({ type: "*/*", limit: "1mb" }),
+    whatsappWebhookRoutes(),
+  );
 
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
