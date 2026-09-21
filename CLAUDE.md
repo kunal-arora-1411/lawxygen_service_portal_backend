@@ -28,17 +28,21 @@ the matter to completion. Nobody at Lawxygen touches it.
 
 ## Where it is now
 
-M0–M4 are substantially built and **235 tests pass**. A real Razorpay test-mode payment
+M0–M4 are substantially built, WhatsApp is code-complete, and **263 tests pass**. A real Razorpay test-mode payment
 has been taken end to end: order `LX-001654`, invoice `LX/2026-27/001191`, ledger
 balanced to zero, assigned automatically to a professional.
 
 Built and working: auth (password, Google OAuth, mobile OTP, password reset), catalogue,
 checkout, payments with a double-entry ledger, GST invoicing, automatic assignment,
-payouts, refunds, daily reconciliation, professional onboarding, transactional email.
+payouts, refunds, daily reconciliation, professional onboarding, transactional email,
+and WhatsApp — templates authored and submitted to Meta from here, outbound sends off
+the outbox, inbound webhooks, threads, and a chat on both dashboards.
 
 **The biggest gaps** (see `backlog.md` for all 25):
 
 - No email provider configured, so nothing sends outside local
+- No WhatsApp credentials, so nothing sends there either — and **local values must be
+  blank, not placeholders** (see mistake 16)
 - Invoices are issued but never shown to the client — no page, no PDF
 - No file upload anywhere: documents cannot pass between client and professional
 - Money settings (commission, GST, TDS) are constants in code, not configuration
@@ -140,7 +144,26 @@ Each of these cost real debugging time. Most are also commented at the site of t
     dev database does not. Reconciliation 500'd until `npm run db:migrate` was run by
     hand. **After pulling, run it.**
 
-13. **pino buffers when stdout is a redirected file.** Twice I tried to read the local
+13. **Config read straight off the parsed `env`.** Three separate times. `env` is
+    frozen at import, so a test setting `process.env` in `beforeEach` changes nothing.
+    Anything a test needs to vary belongs in a config holder with a `setXxx()` seam —
+    see `modules/whatsapp/client.ts`.
+
+14. **A signature-verifying webhook must mount before `express.json()`.** The signature
+    covers the exact bytes the provider sent; once the body is parsed and re-serialised
+    it can never match. The WhatsApp webhook first landed after the JSON parser and
+    would have rejected every real delivery.
+
+15. **Non-empty placeholder credentials make an adapter think it is configured.** Fake
+    values in `.env.local` had the WhatsApp adapter genuinely call Meta and fail. That
+    is correct behaviour — attempt or refuse, never silently no-op — so **local config
+    must be blank, not fake.**
+
+16. **`pkill -f "tsx watch"` does not kill the Windows process holding the port.** A
+    stale server answered health checks with old code for several minutes. Use
+    `Get-NetTCPConnection -LocalPort N` and `Stop-Process` from PowerShell.
+
+17. **pino buffers when stdout is a redirected file.** Twice I tried to read the local
     mail stub's output from a dev-server log and got nothing. Read the `notifications`
     table instead, or call the module directly.
 
@@ -189,6 +212,33 @@ moves money or sends a message; locally it may log instead.
   orphans, already 301'd, and the seed must never produce them.
 
 ---
+
+## WhatsApp
+
+Lawxygen talks to Meta's Cloud API directly. **PingMe is not in the loop at all** — not
+its service, not its console, not its account. It was built for a client; only its code
+was reusable, and `src/lib/whatsapp/graph.ts` and `classify.ts` are ports of it.
+
+Four rules of Meta's shape the whole feature:
+
+1. **A template does not open the reply window.** Only a message _from the client_ does.
+   Until they write, every outreach must be another approved template.
+2. **The window is 24 hours** from the client's last message. Outside it, free text is
+   refused — locally, with a message saying to send a template, rather than by Meta.
+3. **Meta sets the template category from the wording**, not from what we ask for.
+   Utility is about ₹0.12 a message, marketing about ₹0.86, and the decision lasts the
+   life of the template. Whatever Meta returns is what gets stored.
+4. **A rejected template name cannot be reused.** `POST /admin/whatsapp/templates/check`
+   validates without submitting, so a name is never spent finding out.
+
+Conversations key on `(phoneNumberId, contactPhone)` — the number _and_ the contact.
+That is what makes the planned pool of five or six numbers a no-migration change, and
+it stops two professionals sharing one client's thread once a number is allocated per
+matter.
+
+`whatsapp_send_attempts` is the same idea as the payment capture path: reserve on an
+idempotency key, claim with an owner token, send, settle. `delivery_unknown` means the
+request left and Meta never answered, so it is never retried automatically.
 
 ## The two tax questions — unresolved, and already asserted on issued invoices
 
