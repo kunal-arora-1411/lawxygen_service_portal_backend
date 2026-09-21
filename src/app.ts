@@ -13,6 +13,7 @@ import { catalogueRoutes } from "./modules/catalogue/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes, webhookRoutes } from "./modules/payments/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
+import { adminWhatsappRoutes, professionalWhatsappRoutes } from "./modules/whatsapp/routes.js";
 import { professionalRoutes } from "./modules/professionals/routes.js";
 import { registerSubscribers } from "./modules/events/subscribers.js";
 
@@ -86,6 +87,8 @@ export function createApp(mountRoutes?: (app: Express) => void): Express {
   app.use("/payments", paymentRoutes());
   app.use("/pro", professionalRoutes());
   app.use("/admin", adminRoutes());
+  app.use("/admin/whatsapp", adminWhatsappRoutes());
+  app.use("/pro/whatsapp", professionalWhatsappRoutes());
 
   mountRoutes?.(app);
 

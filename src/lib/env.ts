@@ -66,6 +66,16 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 
+  // Phase 2 — WhatsApp, via Meta's Cloud API directly. One number for now; the
+  // planned pool of five or six needs business verification first, because an
+  // unverified portfolio is capped at two numbers.
+  WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+  WHATSAPP_WABA_ID: z.string().optional(),
+  WHATSAPP_ACCESS_TOKEN: z.string().optional(),
+  /** Verifies webhook signatures. Needed from Phase B; harmless to set now. */
+  WHATSAPP_APP_SECRET: z.string().optional(),
+  META_GRAPH_API_VERSION: z.string().default("v23.0"),
+
   // Observability
   SENTRY_DSN: z.url().optional(),
 });

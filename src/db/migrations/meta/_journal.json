@@ -57,6 +57,13 @@
       "when": 1789842647981,
       "tag": "0007_dazzling_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790011506418,
+      "tag": "0008_next_slyde",
+      "breakpoints": true
     }
   ]
 }

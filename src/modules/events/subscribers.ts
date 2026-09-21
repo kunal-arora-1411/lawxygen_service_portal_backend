@@ -2,6 +2,7 @@ import { DOMAIN_EVENTS } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
 import { assignOrder, drainAwaitingAssignment } from "../assignment/engine.js";
 import { registerNotificationSubscribers } from "../notifications/subscribers.js";
+import { registerWhatsappSubscribers } from "../whatsapp/subscribers.js";
 import { register } from "./outbox.js";
 
 /**
@@ -18,6 +19,8 @@ export function registerSubscribers(): void {
   // Telling people what happened lives in its own file, because it is the part that
   // grows — WhatsApp in Phase 2 joins it and nothing here changes.
   registerNotificationSubscribers();
+  // Phase A: outbound templates only. No inbound, no conversations yet.
+  registerWhatsappSubscribers();
 
   register({
     name: "assign",
