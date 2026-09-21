@@ -66,7 +66,6 @@ export function setWhatsappConfig(override: WhatsappConfig | undefined): void {
     ...(env.WHATSAPP_ACCESS_TOKEN ? { accessToken: env.WHATSAPP_ACCESS_TOKEN } : {}),
     ...(env.WHATSAPP_WABA_ID ? { wabaId: env.WHATSAPP_WABA_ID } : {}),
     ...(env.WHATSAPP_APP_SECRET ? { appSecret: env.WHATSAPP_APP_SECRET } : {}),
-    ...(env.WHATSAPP_APP_SECRET ? { appSecret: env.WHATSAPP_APP_SECRET } : {}),
   };
   sender = undefined;
   freeTextSender = undefined;
