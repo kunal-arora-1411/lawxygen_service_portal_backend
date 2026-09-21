@@ -187,3 +187,47 @@ export function listMetaTemplates(): Promise<MetaTemplate[]> {
 export function setTemplateLister(override: TemplateLister | undefined): void {
   lister = override ?? liveList;
 }
+
+/**
+ * Submitting a template to Meta for review.
+ *
+ * Lawxygen authors its own templates — there is no other console in the loop. A
+ * submission comes back PENDING and Meta reviews it, usually within minutes but
+ * sometimes over a day.
+ *
+ * Two things about rejection are worth knowing before building on this. Meta may
+ * return a different category from the one requested, and its answer is the one that
+ * decides the price. And a rejected name cannot simply be resubmitted — the fix
+ * usually has to go out under a new name.
+ */
+export type SubmittedTemplate = { providerTemplateId: string; status: string; category?: string };
+
+export type TemplateSubmitter = (payload: Record<string, unknown>) => Promise<SubmittedTemplate>;
+
+const liveSubmit: TemplateSubmitter = async (payload) => {
+  if (!config.wabaId) {
+    throw new ApiError("upstream_failure", "No WhatsApp Business Account is configured.");
+  }
+  const response = await graphPost(`${config.wabaId}/message_templates`, token(), payload);
+  const body = response as { id?: string; status?: string; category?: string };
+  if (!body.id) {
+    throw new ApiError("upstream_failure", "Meta accepted the template without returning an id.");
+  }
+  return {
+    providerTemplateId: body.id,
+    status: body.status ?? "PENDING",
+    ...(body.category ? { category: body.category } : {}),
+  };
+};
+
+let submitter: TemplateSubmitter = liveSubmit;
+
+export function submitTemplate(payload: Record<string, unknown>): Promise<SubmittedTemplate> {
+  if (!isConfigured()) throw new ApiError("upstream_failure", "WhatsApp is not configured.");
+  return submitter(payload);
+}
+
+/** Test seam. Pass undefined to restore the live client. */
+export function setTemplateSubmitter(override: TemplateSubmitter | undefined): void {
+  submitter = override ?? liveSubmit;
+}

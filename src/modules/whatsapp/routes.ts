@@ -15,7 +15,13 @@ import { authorize } from "../../lib/auth/policy.js";
 import { actorOf, requireRole } from "../auth/middleware.js";
 import { isConfigured } from "./client.js";
 import { sendTemplateMessage } from "./send.js";
-import { listTemplates, registerTemplate, sendableTemplates, syncTemplates } from "./templates.js";
+import {
+  checkTemplate,
+  createTemplate,
+  listTemplates,
+  sendableTemplates,
+  syncTemplates,
+} from "./templates.js";
 
 /**
  * Firing a template by hand, and managing the registry.
@@ -25,6 +31,20 @@ import { listTemplates, registerTemplate, sendableTemplates, syncTemplates } fro
  * anyone; a professional may message only the client on a matter they currently hold.
  * That check is the substance of this file.
  */
+
+const templateDraftSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9_]+$/, "Lowercase letters, numbers and underscores only.")
+    .max(512),
+  language: z.string().trim().max(32).optional(),
+  category: z.enum(["utility", "authentication", "marketing"]).optional(),
+  body: z.string().trim().min(1).max(1024),
+  footer: z.string().trim().max(60).optional(),
+  samples: z.array(z.string().trim().max(200)).max(10).default([]),
+  variables: z.array(z.string().trim().max(120)).max(10).default([]),
+});
 
 const sendSchema = z.object({
   templateName: z.string().trim().min(1).max(512),
@@ -203,22 +223,16 @@ function whatsappRoutes(minimumRole: "admin" | "professional"): Router {
       handler((req) => syncTemplates(actorOf(req))),
     );
 
+    /** Validate without submitting, so a bad name is never spent. */
+    router.post(
+      "/templates/check",
+      handler((req) => checkTemplate(actorOf(req), parse(templateDraftSchema, req.body))),
+    );
+
     router.post(
       "/templates",
       handler(
-        async (req) =>
-          registerTemplate(
-            actorOf(req),
-            parse(
-              z.object({
-                name: z.string().trim().min(1).max(512),
-                language: z.string().trim().max(32).optional(),
-                variables: z.array(z.string().trim().max(120)).max(10).default([]),
-                category: z.enum(["utility", "authentication", "marketing"]).optional(),
-              }),
-              req.body,
-            ),
-          ),
+        async (req) => createTemplate(actorOf(req), parse(templateDraftSchema, req.body)),
         201,
       ),
     );

@@ -10,6 +10,7 @@ import { setMailSender } from "../../src/lib/mailer.js";
 import { dispatchPending } from "../../src/modules/events/outbox.js";
 import { setGatewayOrderCreator } from "../../src/modules/payments/razorpay.js";
 import {
+  setTemplateSubmitter,
   setWhatsappConfig,
   setWhatsappSender,
   type TemplateSend,
@@ -180,6 +181,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   setWhatsappSender(undefined);
+  setTemplateSubmitter(undefined);
   setWhatsappConfig(undefined);
   setMailSender(undefined);
 });
@@ -193,7 +195,7 @@ afterAll(async () => {
   await sql`delete from whatsapp_send_attempts where order_id in (${mine})`;
   await sql`delete from whatsapp_send_attempts where source <> 'outbox'`;
   await sql`delete from whatsapp_cooldowns`;
-  await sql`delete from whatsapp_templates where name in (${RECEIPT}, ${NOTICE})`;
+  await sql`delete from whatsapp_templates`;
   await sql`delete from notifications`;
   await sql`delete from outbox_events`;
   await sql`delete from assignments where order_id in (${mine})`;
@@ -404,5 +406,109 @@ suite("sending by hand", () => {
 
     expect(second.body.data.status).toBe("deduplicated");
     expect(sent).toHaveLength(1);
+  });
+});
+
+suite("authoring a template", () => {
+  it("submits a valid draft and stores what Meta decided", async () => {
+    setTemplateSubmitter(() =>
+      Promise.resolve({ providerTemplateId: "tpl_1", status: "PENDING", category: "UTILITY" }),
+    );
+
+    const res = await request(app)
+      .post("/admin/whatsapp/templates")
+      .set("Cookie", await adminCookie())
+      .send({
+        name: "lawxygen_matter_update",
+        category: "utility",
+        body: "Hello {{1}}, your {{2}} is now in progress. Reference {{3}}.",
+        samples: ["Priya", "GST Registration", "LX-000123"],
+        variables: ["client name", "service", "reference"],
+      })
+      .expect(201);
+
+    expect(res.body.data.status).toBe("pending");
+    expect(res.body.data.category).toBe("utility");
+
+    const [row] = await sql!`select provider_template_id, status from whatsapp_templates
+                             where name = 'lawxygen_matter_update'`;
+    expect(row!.provider_template_id).toBe("tpl_1");
+    expect(row!.status).toBe("pending");
+  });
+
+  it("stores Meta's category, not the one we asked for", async () => {
+    // Asking for utility and being given marketing is the difference between
+    // ₹0.115 and ₹0.86 a message. Only Meta's answer counts.
+    setTemplateSubmitter(() =>
+      Promise.resolve({ providerTemplateId: "tpl_2", status: "PENDING", category: "MARKETING" }),
+    );
+
+    const res = await request(app)
+      .post("/admin/whatsapp/templates")
+      .set("Cookie", await adminCookie())
+      .send({
+        name: "lawxygen_reclassified",
+        category: "utility",
+        body: "Hello {{1}}, here is an update about your matter.",
+        samples: ["Priya"],
+        variables: ["client name"],
+      })
+      .expect(201);
+
+    expect(res.body.data.category).toBe("marketing");
+  });
+
+  it("refuses a draft Meta would reject, before spending the name", async () => {
+    let submitted = 0;
+    setTemplateSubmitter(() => {
+      submitted += 1;
+      return Promise.resolve({ providerTemplateId: "tpl_x", status: "PENDING" });
+    });
+
+    const res = await request(app)
+      .post("/admin/whatsapp/templates")
+      .set("Cookie", await adminCookie())
+      .send({
+        name: "lawxygen_bad_draft",
+        category: "utility",
+        // Opens with a variable, and skips {{2}}. Both are Meta rejections.
+        body: "{{1}} your matter {{3}} is ready",
+        samples: ["Priya"],
+        variables: ["client name"],
+      })
+      .expect(400);
+
+    expect(res.body.code).toBe("invalid_input");
+    expect(Object.keys(res.body.fieldErrors)).toContain("body");
+    // A rejected name cannot be reused, so nothing was sent.
+    expect(submitted).toBe(0);
+  });
+
+  it("warns that promotional wording will be repriced as marketing", async () => {
+    const res = await request(app)
+      .post("/admin/whatsapp/templates/check")
+      .set("Cookie", await adminCookie())
+      .send({
+        name: "lawxygen_promo_ish",
+        category: "utility",
+        body: "Hi {{1}}, get 20% off your next filing. Limited time.",
+        samples: ["Priya"],
+      })
+      .expect(200);
+
+    const categoryIssue = (res.body.data.issues as { field: string; message: string }[]).find(
+      (issue) => issue.field === "category",
+    );
+    expect(categoryIssue).toBeDefined();
+    expect(categoryIssue!.message).toContain("seven times");
+  });
+
+  it("will not let a professional author a template", async () => {
+    const pro = await newProfessional();
+    await request(app)
+      .post("/pro/whatsapp/templates")
+      .set("Cookie", pro.cookie)
+      .send({ name: "sneaky", body: "hello {{1}} there", samples: ["x"] })
+      .expect(404);
   });
 });

@@ -1,13 +1,21 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
   whatsappTemplates,
   type WhatsappTemplateCategory,
   type WhatsappTemplateStatus,
 } from "../../db/schema/index.js";
+import { ApiError } from "../../lib/api.js";
 import { authorize, type Actor } from "../../lib/auth/policy.js";
+import {
+  toMetaPayload,
+  validateTemplate,
+  type TemplateComponent,
+  type TemplateDraft,
+  type ValidationIssue,
+} from "../../lib/whatsapp/validate.js";
 import { logger } from "../../lib/logger.js";
-import { listMetaTemplates } from "./client.js";
+import { listMetaTemplates, submitTemplate } from "./client.js";
 
 /**
  * The template registry.
@@ -159,57 +167,152 @@ export async function sendableTemplates(actor: Actor): Promise<TemplateView[]> {
 }
 
 /**
- * Registers a template Lawxygen intends to use, before Meta has been asked.
+ * Authoring a template, and sending it to Meta for review.
  *
- * Phase A authors templates in PingMe's console and references them by name here —
- * names are just strings to Meta. This exists so a name can be recorded, and its
- * variable order documented, ahead of the first sync. Authoring inside Lawxygen is
- * Phase E.
+ * Lawxygen owns its own WhatsApp Business Account and authors its own templates —
+ * nothing else is in the loop. A draft is validated locally first, because Meta reports
+ * a rejection days later as a terse code and a rejected name cannot immediately be
+ * reused: the fix usually has to go out under a different name.
+ *
+ * Meta may also answer with a **different category** from the one requested, and its
+ * answer is the one that sets the price. So whatever comes back is what gets stored,
+ * never what was asked for.
  */
-export async function registerTemplate(
+export async function createTemplate(
   actor: Actor,
   input: {
     name: string;
     language?: string;
-    variables: string[];
     category?: WhatsappTemplateCategory;
+    /** The message, with `{{1}}`, `{{2}}` … for the variable parts. */
+    body: string;
+    /** Short line under the message. Optional, and cannot contain variables. */
+    footer?: string;
+    /** An example for each variable, in order. Meta rejects a draft without them. */
+    samples: string[];
+    /** What each variable means, for whoever fills them in later. */
+    variables: string[];
   },
 ): Promise<TemplateView> {
   authorize(actor, "whatsapp.template.write", { minimumRole: "admin" });
 
   const language = input.language ?? "en";
+  const category = input.category ?? "utility";
+
+  const components: TemplateComponent[] = [
+    { type: "BODY", text: input.body },
+    ...(input.footer ? [{ type: "FOOTER" as const, text: input.footer }] : []),
+  ];
+
+  const draft: TemplateDraft = {
+    name: input.name,
+    language,
+    category: category.toUpperCase() as TemplateDraft["category"],
+    components,
+    sampleValues: Object.fromEntries(
+      input.samples.map((value, index) => [`body_${String(index + 1)}`, value]),
+    ),
+  };
+
+  const issues = validateTemplate(draft);
+  if (issues.length > 0) {
+    throw new ApiError("invalid_input", "That template would be rejected by Meta.", {
+      fieldErrors: issues.reduce<Record<string, string[]>>((all, issue) => {
+        all[issue.field] = [...(all[issue.field] ?? []), issue.message];
+        return all;
+      }, {}),
+    });
+  }
+
+  const submitted = await submitTemplate(toMetaPayload(draft));
+
+  // Meta's category wins. Asking for utility and being given marketing is the
+  // difference between ₹0.115 and ₹0.86 a message, and only Meta decides.
+  const decided = mapCategory(submitted.category);
+
   await db
     .insert(whatsappTemplates)
     .values({
       name: input.name,
       language,
-      category: input.category ?? "utility",
-      status: "draft",
+      category: decided,
+      status: mapStatus(submitted.status),
+      providerTemplateId: submitted.providerTemplateId,
+      components,
       variables: input.variables,
+      syncedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: [whatsappTemplates.name, whatsappTemplates.language],
-      /**
-       * Only the variable list. Meta owns status, category and components, and a
-       * registration must never overwrite what a sync learned from them.
-       */
-      set: { variables: input.variables },
+      set: {
+        category: decided,
+        status: mapStatus(submitted.status),
+        providerTemplateId: submitted.providerTemplateId,
+        components,
+        variables: input.variables,
+        syncedAt: new Date(),
+      },
     });
+
+  if (decided !== category) {
+    logger.warn(
+      { template: input.name, asked: category, decided },
+      "Meta assigned a different template category from the one requested",
+    );
+  }
+
+  logger.info({ template: input.name, status: submitted.status }, "whatsapp template submitted");
 
   const [row] = await db
     .select()
     .from(whatsappTemplates)
-    .where(eq(whatsappTemplates.name, input.name))
+    .where(and(eq(whatsappTemplates.name, input.name), eq(whatsappTemplates.language, language)))
     .limit(1);
 
   return {
     name: input.name,
     language,
-    category: row?.category ?? "utility",
-    status: row?.status ?? "draft",
+    category: decided,
+    status: row?.status ?? "pending",
     variables: input.variables,
     reviewNote: row?.reviewNote ?? null,
     syncedAt: row?.syncedAt?.toISOString() ?? null,
-    bodyPreview: bodyOf(row?.components),
+    bodyPreview: input.body,
+  };
+}
+
+/**
+ * Checks a draft without sending it anywhere.
+ *
+ * So the authoring screen can warn about a promotional-sounding utility template
+ * *before* somebody commits to a name they cannot reuse.
+ */
+export function checkTemplate(
+  actor: Actor,
+  input: {
+    name: string;
+    language?: string;
+    category?: WhatsappTemplateCategory;
+    body: string;
+    footer?: string;
+    samples: string[];
+  },
+): { issues: ValidationIssue[] } {
+  authorize(actor, "whatsapp.template.write", { minimumRole: "admin" });
+
+  const category = (input.category ?? "utility").toUpperCase() as TemplateDraft["category"];
+  return {
+    issues: validateTemplate({
+      name: input.name,
+      language: input.language ?? "en",
+      category,
+      components: [
+        { type: "BODY", text: input.body },
+        ...(input.footer ? [{ type: "FOOTER" as const, text: input.footer }] : []),
+      ],
+      sampleValues: Object.fromEntries(
+        input.samples.map((value, index) => [`body_${String(index + 1)}`, value]),
+      ),
+    }),
   };
 }
