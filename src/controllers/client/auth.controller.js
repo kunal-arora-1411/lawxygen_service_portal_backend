@@ -3,16 +3,16 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-import { User } from "../models/user.model.js";
-import ApiError from "../utils/ApiError.js";
-import ApiResponse from "../utils/ApiResponse.js";
-import asyncHandler from "../utils/asyncHandler.js";
+import { User } from "../../models/user.model.js";
+import ApiError from "../../utils/ApiError.js";
+import ApiResponse from "../../utils/ApiResponse.js";
+import asyncHandler from "../../utils/asyncHandler.js";
 
 import {
   generateAccessToken,
   generateRefreshToken,
   generateTokens
-} from "../utils/generateToken.js";
+} from "../../utils/generateToken.js";
 
 export const emailAuth = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
@@ -96,7 +96,8 @@ export const emailAuth = asyncHandler(async (req, res) => {
     isVerified: true,
     authProviders: [
       {
-        type: "email",
+        provider: "email",
+        providerId: normalizedEmail,
       },
     ],
   });
@@ -173,7 +174,8 @@ export const sendPhoneOtp = asyncHandler(async (req, res) => {
       otpExpiresAt,
       authProviders: [
         {
-          type: "phone",
+          provider: "phone",
+          providerId: normalizedPhone,
         },
       ],
     });

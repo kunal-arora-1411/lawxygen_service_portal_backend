@@ -50,13 +50,24 @@ const userSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["user", "lawyer", "admin"],
+      enum: ["user", "professional", "admin", "super_admin"],
       default: "user",
     },
 
     isVerified: {
       type: Boolean,
       default: false,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+
+    location: {
+      type: String,
+      trim: true,
+      default: null,
     },
 
     profileCompleted: {
@@ -67,6 +78,31 @@ const userSchema = new mongoose.Schema(
     profileImage: {
       type: String,
       default: null,
+    },
+
+    // Only populated when role === "professional"
+    professionalProfile: {
+      title: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      specialties: {
+        type: [String],
+        default: [],
+      },
+
+      languages: {
+        type: [String],
+        default: [],
+      },
+
+      availability: {
+        type: String,
+        enum: ["online", "in_call", "offline"],
+        default: "offline",
+      },
     },
 
     authProviders: {

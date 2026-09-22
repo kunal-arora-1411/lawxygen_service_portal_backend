@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-const serviceSchema = new mongoose.Schema(
+const serviceServiceSchema = new mongoose.Schema(
   {
     title: {
       type: String,
@@ -12,7 +12,9 @@ const serviceSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
       trim: true,
+      index: true,
     },
 
     category: {
@@ -25,11 +27,12 @@ const serviceSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      index: true,
     },
 
     accent: {
       type: String,
-      default: null,
+      default: "",
     },
 
     variant: {
@@ -39,7 +42,8 @@ const serviceSchema = new mongoose.Schema(
 
     archetype: {
       type: String,
-      default: null,
+      default: "",
+      trim: true,
     },
 
     summary: {
@@ -53,7 +57,11 @@ const serviceSchema = new mongoose.Schema(
     },
 
     checklist: {
-      type: [[String]],
+      type: [
+        {
+          type: [String],
+        },
+      ],
       default: [],
     },
 
@@ -63,31 +71,57 @@ const serviceSchema = new mongoose.Schema(
     },
 
     benefits: {
-      type: [[String]],
+      type: [
+        {
+          type: [String],
+        },
+      ],
       default: [],
     },
 
     documents: {
-      type: [[String]],
+      type: [
+        {
+          type: [String],
+        },
+      ],
       default: [],
     },
 
     process: {
-      type: [[String]],
+      type: [
+        {
+          type: [String],
+        },
+      ],
       default: [],
     },
 
     faqs: {
-      type: [[String]],
+      type: [
+        {
+          type: [String],
+        },
+      ],
       default: [],
     },
 
-    related: [
-      {
-        title: String,
-        href: String,
-      },
-    ],
+    related: {
+      type: [
+        {
+          title: {
+            type: String,
+            required: true,
+          },
+
+          href: {
+            type: String,
+            required: true,
+          },
+        },
+      ],
+      default: [],
+    },
 
     cta: {
       type: String,
@@ -101,12 +135,18 @@ const serviceSchema = new mongoose.Schema(
 
     bg: {
       type: String,
-      default: null,
+      default: "",
     },
 
     soft: {
       type: String,
-      default: null,
+      default: "",
+    },
+
+    price: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     isActive: {
@@ -119,4 +159,6 @@ const serviceSchema = new mongoose.Schema(
   }
 );
 
-export const Service = mongoose.model("Service", serviceSchema);
+const Service = mongoose.model("Service", serviceServiceSchema);
+
+export default Service;

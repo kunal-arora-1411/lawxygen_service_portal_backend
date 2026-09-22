@@ -29,3 +29,21 @@ export const verifyJwt = asyncHandler(async (req, _, next) => {
     throw new ApiError(401, error?.message || "Invalid access token");
   }
 });
+
+export const authorizeRoles = (...allowedRoles) => {
+  return (req, _res, next) => {
+    if (!req.user) {
+      throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      throw new ApiError(403, "You do not have permission to perform this action");
+    }
+
+    next();
+  };
+};
+
+export const verifyAdmin = authorizeRoles("admin", "super_admin");
+
+export const verifyProfessional = authorizeRoles("professional");
