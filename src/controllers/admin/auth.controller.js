@@ -81,21 +81,29 @@ export const adminRefreshToken = asyncHandler(async (req, res) => {
   try {
     const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
 
-    const admin = await User.findById(decodedToken?._id);
+    const { accessToken, refreshToken } = generateTokens(decodedToken?._id);
 
-    if (!admin || !ADMIN_ROLES.includes(admin.role)) {
-      throw new ApiError(401, "Invalid refresh token");
-    }
+    // Atomic check-and-rotate: the filter only matches if `refreshToken` in
+    // the DB still equals the one this request presented. If two requests
+    // race on the same (about-to-expire) refresh token, only the first to
+    // reach Mongo wins this update — the second finds no matching document
+    // (the first already rotated it) and correctly gets rejected below,
+    // instead of both "succeeding" with two different, conflicting token
+    // pairs.
+    const admin = await User.findOneAndUpdate(
+      {
+        _id: decodedToken?._id,
+        refreshToken: incomingRefreshToken,
+        role: { $in: ADMIN_ROLES },
+        isDeleted: false,
+      },
+      { $set: { refreshToken } },
+      { new: true }
+    );
 
-    if (admin.refreshToken !== incomingRefreshToken) {
+    if (!admin) {
       throw new ApiError(401, "Refresh token is expired or invalid");
     }
-
-    const { accessToken, refreshToken } = generateTokens(admin._id);
-
-    admin.refreshToken = refreshToken;
-
-    await admin.save({ validateBeforeSave: false });
 
     res.cookie("accessToken", accessToken, cookieOptions(15 * 60 * 1000));
     res.cookie("refreshToken", refreshToken, cookieOptions(7 * 24 * 60 * 60 * 1000));

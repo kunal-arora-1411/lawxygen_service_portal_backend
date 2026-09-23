@@ -1,11 +1,9 @@
-import dotenv from "dotenv";
-dotenv.config({ quiet: true });
-
+import "dotenv/config";
 import app from "./app.js";
 import connectDB from "./config/db.js";
+import "./config/mailer.js";
 
 const PORT = process.env.PORT || 5000;
-
 
 const startServer = async () => {
   await connectDB();

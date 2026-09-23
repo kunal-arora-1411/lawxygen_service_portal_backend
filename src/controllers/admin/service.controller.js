@@ -111,6 +111,32 @@ export const publishServiceAdmin = asyncHandler(async (req, res) => {
 });
 
 /**
+ * DELETE /api/admin/services/:id
+ *
+ * Permanently removes the service from the catalogue. Existing
+ * ServiceMatter records keep their own serviceSnapshot, so past
+ * client matters aren't affected — only the live `service` populate
+ * on them resolves to null afterwards.
+ */
+export const deleteServiceAdmin = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ApiError(400, "Invalid service ID");
+  }
+
+  const service = await Service.findByIdAndDelete(id);
+
+  if (!service) {
+    throw new ApiError(404, "Service not found");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(200, null, "Service deleted successfully")
+  );
+});
+
+/**
  * GET /api/admin/services/stats
  */
 export const getServiceStatsAdmin = asyncHandler(async (req, res) => {

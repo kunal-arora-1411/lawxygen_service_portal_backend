@@ -5,6 +5,7 @@ import {
   createServiceAdmin,
   updateServiceAdmin,
   publishServiceAdmin,
+  deleteServiceAdmin,
   getServiceStatsAdmin,
 } from "../../controllers/admin/service.controller.js";
 
@@ -23,5 +24,7 @@ router.post("/", createServiceAdmin);
 router.patch("/:id", updateServiceAdmin);
 
 router.patch("/:id/publish", publishServiceAdmin);
+
+router.delete("/:id", deleteServiceAdmin);
 
 export default router;

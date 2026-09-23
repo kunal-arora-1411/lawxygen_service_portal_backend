@@ -49,7 +49,10 @@ export const authenticateSocialUser = async ({
   if (!user) {
     user = await User.create({
       name: name || null,
-      email: email?.toLowerCase() || null,
+      // Omit entirely (not `null`) when absent, so the sparse unique index
+      // on email actually skips this document instead of colliding with
+      // every other account created without one.
+      ...(email && { email: email.toLowerCase() }),
       profileImage: profileImage || null,
       isVerified: true,
       authProviders: [

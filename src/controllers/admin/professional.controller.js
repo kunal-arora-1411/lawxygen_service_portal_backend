@@ -76,8 +76,10 @@ export const createProfessional = asyncHandler(async (req, res) => {
 
   const professional = await User.create({
     name: name.trim(),
-    email: email ? email.toLowerCase().trim() : null,
-    phone: phone ? phone.trim() : null,
+    // Omit entirely (not `null`) when absent — the sparse unique index on
+    // email/phone only skips documents where the field is missing.
+    ...(email && { email: email.toLowerCase().trim() }),
+    ...(phone && { phone: phone.trim() }),
     role: "professional",
     isVerified: true,
     professionalProfile: {

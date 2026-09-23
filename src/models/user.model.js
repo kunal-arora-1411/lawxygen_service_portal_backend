@@ -26,13 +26,17 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
 
+    // No `default: null` here on purpose: a sparse unique index only skips
+    // documents where the field is *absent*, not ones explicitly set to
+    // null. Defaulting to null would make every account without an
+    // email/phone collide on a duplicate-key error the second time it
+    // happens.
     email: {
       type: String,
       lowercase: true,
       trim: true,
       unique: true,
       sparse: true,
-      default: null,
     },
 
     phone: {
@@ -40,7 +44,6 @@ const userSchema = new mongoose.Schema(
       trim: true,
       unique: true,
       sparse: true,
-      default: null,
     },
 
     password: {

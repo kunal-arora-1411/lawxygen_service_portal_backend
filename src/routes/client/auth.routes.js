@@ -6,6 +6,10 @@ import {
   emailAuth,
   sendPhoneOtp,
   verifyPhoneOtp,
+  testEmail,
+  forgotPassword,
+  verifyResetOtp,
+  resetPassword,
 } from "../../controllers/client/auth.controller.js";
 
 import { verifyJwt } from "../../middleware/auth.middleware.js";
@@ -29,5 +33,11 @@ router.post("/facebook", facebookAuth);
 router.post("/refresh-token", refreshAccessToken);
 
 router.post("/logout", verifyJwt, logoutUser);
+
+router.post("/forgot-password", forgotPassword);
+
+router.post("/verify-reset-otp", verifyResetOtp);
+
+router.post("/reset-password", resetPassword);
 
 export default router;

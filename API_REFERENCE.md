@@ -315,6 +315,7 @@ Backed by `User` accounts with `role: "professional"`; `professionalProfile.titl
 | POST | `/` | Full `Service` body (see §2 shape) minus `_id` | `409` if `slug` already exists. |
 | PATCH | `/:id` | Partial `Service` body | `409` on slug collision. |
 | PATCH | `/:id/publish` | `{ isActive: boolean }` | |
+| DELETE | `/:id` | — | **Not in the original spec** (which only had publish/unpublish) but added since the admin frontend needs it. Permanently removes the service document. Past `ServiceMatter` records keep their own `serviceSnapshot`, so historical client matters aren't affected — only the live `service` populate on them resolves to `null` afterwards. |
 
 ---
 
