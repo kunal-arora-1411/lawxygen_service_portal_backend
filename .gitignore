@@ -2,9 +2,13 @@ node_modules/
 dist/
 coverage/
 
+# Ignore every env file, then allow back only the committed templates. The previous
+# rules listed specific names, which meant a new one — `.env.production`, holding the
+# live Razorpay secret and the field encryption key — would have been committed.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.production.example
 
 *.log
 npm-debug.log*

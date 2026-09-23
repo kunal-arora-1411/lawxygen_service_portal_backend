@@ -1,0 +1,24 @@
+# Everything the image builds for itself, plus everything that must never reach it.
+node_modules
+dist
+.git
+.github
+.env
+.env.local
+.env.*.local
+*.log
+coverage
+test
+vitest.config.ts
+eslint.config.mjs
+.prettierrc.json
+.prettierignore
+docker-compose.yml
+docker-compose.prod.yml
+Dockerfile
+.dockerignore
+deploy
+docs
+README.md
+CLAUDE.md
+scripts/prepare-test-db.ts
