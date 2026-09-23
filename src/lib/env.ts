@@ -86,7 +86,22 @@ function format(error: z.ZodError): string {
   return error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
 }
 
-const parsed = schema.safeParse(process.env);
+/**
+ * An empty variable means unset, everywhere.
+ *
+ * `.optional()` accepts `undefined`, not `""` — so a blank `SENTRY_DSN=` in an env file
+ * fails `z.url()` and takes the whole process down at boot. That is not hypothetical:
+ * it is exactly what the first production deploy did, and the shape of `.env` this
+ * project asks for makes it inevitable. Adapters must be **blank** rather than holding
+ * placeholder credentials, because a non-empty fake makes an adapter believe it is
+ * configured and call a real third party.
+ *
+ * `required()` below already treats `""` as missing. This makes the schema agree with it
+ * rather than the two disagreeing about what an empty string means.
+ */
+const source = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== ""));
+
+const parsed = schema.safeParse(source);
 if (!parsed.success) {
   throw new Error(`Invalid environment variables:\n${format(parsed.error)}`);
 }
