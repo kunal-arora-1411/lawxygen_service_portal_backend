@@ -47,8 +47,8 @@ the outbox, inbound webhooks, threads, and a chat on both dashboards.
 - No file upload anywhere: documents cannot pass between client and professional
 - Money settings (commission, GST, TDS) are constants in code, not configuration
 - Impersonation is half-built: the policy blocklist exists, no route sets it
-- No staging. Production is PM2 on a VPS behind nginx (`docs/deployment.md`), not yet
-  run end to end on the server
+- No staging. Production is PM2 on a VPS behind nginx, deployed by CI on every push
+  to `main` (`docs/deployment.md`)
 
 **Blocked on someone else:** Razorpay production account, RazorpayX for payouts, DLT
 registration for SMS, two CA determinations (below), real prices, professional
@@ -291,8 +291,11 @@ database. Register through the API, then
 
 **No Docker in production.** The repo is cloned onto the VPS at `/opt/lawxygen/api`,
 built there, and run by PM2 from `ecosystem.config.cjs`; the database is Neon.
-`bash deploy/deploy.sh` is the whole deploy. `docs/deployment.md` has the rest. Two things
-in the PM2 config are load-bearing:
+**Every push to `main` deploys itself** once CI passes (`.github/workflows/ci.yml`, job
+`deploy`); by hand it is `bash deploy/deploy.sh` on the box. `docs/deployment.md` has the
+rest. The host is shared with another PM2 app (`hostel-backend`) on the system Node 20 —
+never `pm2 restart all`, `pm2 kill` or `pm2 update`, and never upgrade that Node. Two
+things in the PM2 config are load-bearing:
 
 - **`instances: 1`, fork mode.** The jobs run in-process and reconciliation takes no
   lock (backlog item 18). A second instance runs it twice.

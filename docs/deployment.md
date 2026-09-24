@@ -6,7 +6,7 @@ what is waiting on somebody.
 | Piece                                   | Where                             | State                                |
 | --------------------------------------- | --------------------------------- | ------------------------------------ |
 | Portal (`lawxygen_service_portal`)      | Vercel, project `lawxygen-portal` | **Deployed**, on a `.vercel.app` URL |
-| API (`lawxygen_service_portal_backend`) | Ubuntu VPS `210.79.129.180`       | Deploying                            |
+| API (`lawxygen_service_portal_backend`) | Ubuntu VPS `210.79.129.180`       | **Live** under PM2, deployed by CI   |
 | Database                                | Neon                              | **Not created yet**                  |
 | DNS                                     | GoDaddy                           | **Records not created yet**          |
 
@@ -163,7 +163,31 @@ separately. Every step gates the next, so a failed build or migration leaves the
 previous version serving rather than a half-updated system running. The previous build
 is kept as `dist.prev`, and a failed health check prints the exact rollback command.
 
-Every later deploy is the same one line: `cd /opt/lawxygen/api && bash deploy/deploy.sh`.
+### Continuous deployment
+
+**Every push to `main` deploys itself** once CI passes. The `deploy` job in
+`.github/workflows/ci.yml` runs after `verify`, SSHes to the box and runs `deploy.sh`,
+then checks `https://api.lawxygen.in/health/ready` from outside. Deploys queue behind
+each other and are never cancelled part-way. A push that fails verification never
+deploys.
+
+The job's key can do exactly one thing. Its line in `~ubuntu/.ssh/authorized_keys`
+carries a forced command:
+
+```
+command="cd /opt/lawxygen/api && exec bash deploy/deploy.sh 2>&1",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 … github-actions-deploy@lawxygen-api
+```
+
+Whatever the job sends, sshd runs that instead. A leaked key can redeploy `main` and
+nothing else — no shell, no forwarding. The private half exists only in the repository
+secret `DEPLOY_SSH_KEY`. The other three secrets are `DEPLOY_HOST`, `DEPLOY_USER`, and
+`DEPLOY_KNOWN_HOSTS`, which pins the server's host keys so a spoofed host is refused
+rather than trusted on first use.
+
+To rotate the key: generate a new pair, replace that line on the server (keeping the
+`command=` prefix), and `gh secret set DEPLOY_SSH_KEY < new_key`.
+
+By hand, a deploy is still one line: `cd /opt/lawxygen/api && bash deploy/deploy.sh`.
 
 ### Operating it
 
@@ -173,6 +197,8 @@ pm2 logs lawxygen-api              # live logs (pino JSON); --lines 200 --nostre
 pm2 restart lawxygen-api           # restart without deploying, e.g. after editing .env.production
 pm2 monit                          # CPU and memory
 ```
+
+`hostel-backend` is in the same list. Always name `lawxygen-api`.
 
 `.env.production` is read by Node at process start, so an edit takes effect on the next
 restart, not before.
@@ -260,20 +286,26 @@ Branch to `main` in project settings), then `vercel git connect`.
 
 ## What is verified and what is not
 
-**Verified** locally against a real PostgreSQL, using the same commands `deploy.sh` runs:
+**Verified on the server** (24 September 2026, when the API moved from Docker to PM2):
 
-- The build to `dist.next` succeeds, and `drizzle-kit migrate` via `node --env-file`
-  applies all migrations.
-- The built API starts under PM2 from `ecosystem.config.cjs`, binds to `127.0.0.1:4000`
-  only, and answers `/health` and `/health/ready`.
+- `deploy.sh` runs end to end: install, build, migrate against Neon, reload, both
+  health checks, `pm2 save`.
+- The API runs under PM2 on the private Node 24, fork mode, one instance, bound to
+  `127.0.0.1:4000` only. `https://api.lawxygen.in/health/ready` answers through nginx and
+  certbot's TLS.
+- `hostel-backend` and the hostelmanage containers were untouched throughout — same
+  PIDs, same restart counts.
+- The Docker `lawxygen-api` container is stopped and removed. Its images
+  (`lawxygen-api`, `lawxygen-api-migrate`) are still on disk and can be deleted with
+  `docker rmi` once nobody wants a fallback.
 - The Vercel production build succeeds, renders the portal, and has
   `https://api.lawxygen.in` inlined — no `localhost` leaked into the bundle.
 
-**Not verified**, because the host is unreachable:
+**Not verified:**
 
-- `bootstrap.sh` and `deploy.sh` have never been run end to end on the server.
-- The nginx config has never been loaded by nginx.
-- certbot has never issued this certificate.
-- No deployment has been made against Neon.
-
-Treat the first run of `bootstrap.sh` as something to watch, not fire and forget.
+- `bootstrap.sh` as a whole has not been run on this host. Its steps were applied by
+  hand (private Node, logrotate entry), because `apt-get install` of packages that are
+  already present can upgrade nginx underneath the other tenant's sites. On a fresh host
+  it is the right entry point.
+- A reboot. The PM2 boot unit (`pm2-ubuntu`) was already enabled and the process list
+  has been saved, so both apps should resurrect; it has not been observed.

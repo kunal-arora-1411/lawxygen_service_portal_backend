@@ -6,9 +6,11 @@ on:
   push:
     branches: [main, master]
 
+# Superseded pull-request runs are cancelled; pushes to main are not. A push cancelled
+# mid-deploy would leave the server half-way through deploy.sh.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -50,3 +52,61 @@ jobs:
             git status --porcelain src/db/migrations
             exit 1
           fi
+
+  # Continuous deployment to api.lawxygen.in, only once verify has passed on main.
+  #
+  # The key in DEPLOY_SSH_KEY is not a login. On the server its authorized_keys entry
+  # carries a forced command, so whatever this job asks for, the only thing that key can
+  # ever do is `cd /opt/lawxygen/api && bash deploy/deploy.sh` — no shell, no forwarding.
+  # A leaked secret can redeploy main, and nothing else.
+  #
+  # Secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS. The host key is
+  # pinned rather than accepted on first use, so a spoofed host is refused.
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://api.lawxygen.in/health
+
+    # Deploys queue behind one another and are never cancelled part-way.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Install the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" deploy
+
+      # deploy.sh already checks from inside the box. This is the view from outside:
+      # DNS, TLS and nginx, as a client sees them.
+      - name: Check the public endpoint
+        run: |
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 https://api.lawxygen.in/health/ready; then
+              echo; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::https://api.lawxygen.in/health/ready is not answering"
+          exit 1
