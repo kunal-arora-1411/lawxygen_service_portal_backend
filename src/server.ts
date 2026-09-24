@@ -18,9 +18,13 @@ import { startJobs } from "./jobs/runner.js";
 async function main(): Promise<void> {
   await assertDatabaseReachable();
 
-  const server = createApp().listen(env.PORT, () => {
-    logger.info({ port: env.PORT, appEnv: env.APP_ENV }, "api listening");
-  });
+  const onListening = () => {
+    logger.info({ host: env.HOST, port: env.PORT, appEnv: env.APP_ENV }, "api listening");
+  };
+  const app = createApp();
+  const server = env.HOST
+    ? app.listen(env.PORT, env.HOST, onListening)
+    : app.listen(env.PORT, onListening);
 
   const stopJobs = startJobs();
 

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# deploy.sh builds beside the live dist/ and keeps the previous one for rollback.
+dist.next/
+dist.prev/
 coverage/
 
 # Ignore every env file, then allow back only the committed templates. The previous

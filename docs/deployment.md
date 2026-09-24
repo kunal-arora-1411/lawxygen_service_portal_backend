@@ -21,7 +21,7 @@ what is waiting on somebody.
       │                 │
 app.lawxygen.in    api.lawxygen.in
    (Vercel,           (VPS: nginx :443
-    region bom1)       → Docker :4000)
+    region bom1)       → PM2 → node :4000)
                             │
                             └── Neon PostgreSQL (TLS)
 ```
@@ -65,20 +65,26 @@ ownership shortcut.
 
 `210.79.129.180` is an Ubuntu 24.04 box (2 vCPU, 3.8GB RAM, ~7.5GB disk free) that is
 **already serving hostelmanage.com** — nginx with two live sites, plus a Docker API and
-Redis container. Lawxygen is a second tenant on it, and the deployment is shaped around
-not disturbing the first:
+Redis container. Lawxygen is a second tenant on it. It does **not** use Docker: the
+repository is cloned onto the box, built there, and run by PM2. The deployment is shaped
+around not disturbing the first tenant:
 
 - `bootstrap.sh` **stages ufw rules but does not enable ufw.** It is currently inactive,
   and switching a firewall on underneath a working service is how an unrelated site goes
   dark. Enable deliberately with `ENABLE_UFW=1 sudo -E bash deploy/bootstrap.sh`.
 - The stock `sites-enabled/default` is only removed if it really is the stock file.
-- `deploy.sh` prunes images **filtered by label**, so it never collects another
-  project's dangling layers.
-- Docker, Compose, nginx and certbot were already installed, so most of `bootstrap.sh`
-  is a no-op here. It stays idempotent for the next host.
+- `bootstrap.sh` installs Node 24 only if there is no Node at all. If an older one is
+  present it **stops rather than upgrading it**, since something else may depend on it.
+- The API binds to `127.0.0.1:4000`, so it is not reachable from outside whether or not
+  ufw is ever enabled. Check nothing else on the host already holds port 4000
+  (`ss -tlnp | grep :4000`) before the first deploy.
+- nginx and certbot were already installed, so that part of `bootstrap.sh` is a no-op
+  here. It stays idempotent for the next host.
 
 Disk is the thing to watch: 68% used, with roughly 6GB of Docker build cache belonging
 to the other project. `docker builder prune` would reclaim it, but that cache is not ours.
+Our footprint is the repository, its `node_modules` (dev dependencies included — see
+below) and PM2's logs, which `pm2-logrotate` caps at 5 × 10MB.
 
 ### 3. Neon
 
@@ -105,17 +111,20 @@ Once the host answers, from your machine:
 ssh -i ~/.ssh/id_ed25519 ubuntu@210.79.129.180
 ```
 
-**Once, to prepare the box:**
+**Once, to prepare the box** — as `ubuntu`, not root, because PM2 keeps a separate
+process list per user and `deploy.sh` must talk to the same one every time:
 
 ```bash
+sudo mkdir -p /opt/lawxygen && sudo chown "$USER": /opt/lawxygen
 git clone <repo> /opt/lawxygen/api
 cd /opt/lawxygen/api
 sudo bash deploy/bootstrap.sh
 ```
 
-That installs Docker, nginx, certbot and ufw, opens 22/80/443, installs the nginx site
-and removes the default one. It does not request a certificate — that comes next, by
-hand, so a DNS mistake fails visibly.
+That installs Node 24, PM2 (registered with systemd so it survives a reboot) and
+`pm2-logrotate`, plus nginx, certbot and ufw rules for 22/80/443. It installs the nginx
+site and removes the default one. It does not request a certificate — that comes next,
+by hand, so a DNS mistake fails visibly.
 
 **Then, once `api.lawxygen.in` resolves to the box:**
 
@@ -142,9 +151,25 @@ nano .env.production
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` pulls, builds, **migrates, then restarts**, then waits for `/health` and
-checks `/health/ready` separately. Every step gates the next, so a failed migration
-leaves the previous version serving rather than a half-updated system running.
+`deploy.sh` pulls, runs `npm ci`, builds into `dist.next`, **migrates, then swaps the
+build in and reloads PM2**, then waits for `/health` and checks `/health/ready`
+separately. Every step gates the next, so a failed build or migration leaves the
+previous version serving rather than a half-updated system running. The previous build
+is kept as `dist.prev`, and a failed health check prints the exact rollback command.
+
+Every later deploy is the same one line: `cd /opt/lawxygen/api && bash deploy/deploy.sh`.
+
+### Operating it
+
+```bash
+pm2 status                         # is it up, how many restarts
+pm2 logs lawxygen-api              # live logs (pino JSON); --lines 200 --nostream for history
+pm2 restart lawxygen-api           # restart without deploying, e.g. after editing .env.production
+pm2 monit                          # CPU and memory
+```
+
+`.env.production` is read by Node at process start, so an edit takes effect on the next
+restart, not before.
 
 ### Back up `FIELD_ENCRYPTION_KEY` somewhere that is not the server
 
@@ -173,7 +198,8 @@ item 20). Set it once, store it in a password manager, and do not touch it again
   script, so a fresh database has no accounts:
 
   ```bash
-  docker compose -f docker-compose.prod.yml --profile tools run --rm migrate npm run db:seed
+  cd /opt/lawxygen/api
+  node --env-file=.env.production --import tsx src/db/seed-catalogue.ts
   # register through the portal, then:
   #   update users set role = 'admin' where email = '…';
   ```
@@ -182,20 +208,33 @@ item 20). Set it once, store it in a password manager, and do not touch it again
 
 ## Why the pieces are shaped the way they are
 
-**Two build targets, one Dockerfile.** `drizzle-kit` is a devDependency, so
-`npm install drizzle-kit` inside a `--omit=dev` image is a silent no-op — the first
-build of this hit exactly that and produced an image whose migration step could not run.
-Migrations therefore run from a `migrate` target built off the build stage, which already
-has the full dependency tree. The runtime image carries no build tooling and is 375MB
-against the migrate image's 735MB.
+**No Docker.** The database is Neon, so nothing stateful runs on the box, and one Node
+process does not need a container around it. PM2 supervises it, restarts it on a crash
+with exponential backoff, and brings it back on boot.
 
-**The migrate service sits behind a compose profile.** `docker compose up -d` must never
-apply schema changes as a side effect of a restart. `deploy.sh` invokes it explicitly.
+**Exactly one PM2 instance, in fork mode.** The background jobs (`src/jobs/runner.ts`)
+run inside the API process, and reconciliation takes no lock. Cluster mode or
+`instances: 2` would run it twice concurrently. Backlog item 18 is the fix; until then,
+`instances: 1` in `ecosystem.config.cjs` is load-bearing.
+
+**Dev dependencies are installed on the server.** `tsc` builds, `drizzle-kit` migrates
+and `tsx` seeds, and all three are devDependencies. `deploy.sh` passes `--include=dev`
+because npm silently omits them whenever `NODE_ENV=production` is set in the shell.
+
+**Node reads `.env.production` itself** (`node --env-file`), for both the API and the
+migration. Sourcing it from bash would fail on `MAIL_FROM=Lawxygen <no-reply@…>`, and
+PM2 has no env-file support of its own. Values in `ecosystem.config.cjs` — `NODE_ENV`,
+`APP_ENV`, `HOST`, `PORT` — win over the file, because Node never overwrites a variable
+that is already set.
 
 **The API binds to `127.0.0.1:4000`, not `0.0.0.0`.** nginx terminates TLS and proxies to
-it; the API is never directly reachable. A bare `4000:4000` in compose would publish it
-to the internet _and_ punch through ufw while doing it, because Docker writes its own
-iptables rules ahead of ufw's.
+it; the API is never directly reachable. That is `HOST` in `ecosystem.config.cjs`.
+Without it the process listens on every interface, and with ufw inactive on this host,
+port 4000 would be open to the internet.
+
+**Migrations run after the build and before the reload.** A build failure never leaves
+the schema changed, and a migration failure never restarts anything. Migrations must stay
+backward compatible with the version still serving, as they always had to.
 
 **nginx must not touch request bodies.** Razorpay and Meta both sign the exact bytes they
 send and the app verifies against a raw `Buffer`. nginx passes bodies through unaltered;
@@ -215,20 +254,18 @@ Branch to `main` in project settings), then `vercel git connect`.
 
 ## What is verified and what is not
 
-**Verified** on a real Docker daemon against a real PostgreSQL:
+**Verified** locally against a real PostgreSQL, using the same commands `deploy.sh` runs:
 
-- Both images build.
-- The migrate image contains `drizzle-kit` and applied all 10 migrations successfully.
-- The runtime image boots with `NODE_ENV=production`, runs as the unprivileged `node`
-  user, connects to the database, and answers `/health` and `/health/ready`.
-- `/catalogue/categories` returns real data in the correct envelope.
-- CORS returns `Access-Control-Allow-Origin: https://app.lawxygen.in` with credentials.
+- The build to `dist.next` succeeds, and `drizzle-kit migrate` via `node --env-file`
+  applies all migrations.
+- The built API starts under PM2 from `ecosystem.config.cjs`, binds to `127.0.0.1:4000`
+  only, and answers `/health` and `/health/ready`.
 - The Vercel production build succeeds, renders the portal, and has
   `https://api.lawxygen.in` inlined — no `localhost` leaked into the bundle.
 
 **Not verified**, because the host is unreachable:
 
-- `bootstrap.sh` and `deploy.sh` have never been run end to end.
+- `bootstrap.sh` and `deploy.sh` have never been run end to end on the server.
 - The nginx config has never been loaded by nginx.
 - certbot has never issued this certificate.
 - No deployment has been made against Neon.

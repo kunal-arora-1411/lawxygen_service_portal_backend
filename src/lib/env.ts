@@ -19,6 +19,14 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_ENV: z.enum(["local", "staging", "production"]).default("local"),
   PORT: z.coerce.number().int().positive().default(4000),
+
+  /**
+   * Interface to bind. Unset listens on every interface, which is what local wants — the
+   * portal's server fetch may resolve `localhost` to `::1`. Production sets `127.0.0.1`
+   * (see `ecosystem.config.cjs`): nginx is the only thing that should reach the API, and
+   * the host's firewall is not something to rely on.
+   */
+  HOST: z.string().optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 
   /** Origin of the portal. Drives CORS. */

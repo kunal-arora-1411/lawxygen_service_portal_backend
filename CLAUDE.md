@@ -47,7 +47,8 @@ the outbox, inbound webhooks, threads, and a chat on both dashboards.
 - No file upload anywhere: documents cannot pass between client and professional
 - Money settings (commission, GST, TDS) are constants in code, not configuration
 - Impersonation is half-built: the policy blocklist exists, no route sets it
-- No CI, no deployment, no staging
+- No staging. Production is PM2 on a VPS behind nginx (`docs/deployment.md`), not yet
+  run end to end on the server
 
 **Blocked on someone else:** Razorpay production account, RazorpayX for payouts, DLT
 registration for SMS, two CA determinations (below), real prices, professional
@@ -285,6 +286,18 @@ There is **no committed demo-data script.** The `client@` / `admin@` / `pro@lawx
 accounts referenced in earlier sessions were created ad hoc and will not exist on a fresh
 database. Register through the API, then
 `update users set role = 'admin' where email = …`.
+
+## Deploying
+
+**No Docker in production.** The repo is cloned onto the VPS at `/opt/lawxygen/api`,
+built there, and run by PM2 from `ecosystem.config.cjs`; the database is Neon.
+`bash deploy/deploy.sh` is the whole deploy. `docs/deployment.md` has the rest. Two things
+in the PM2 config are load-bearing:
+
+- **`instances: 1`, fork mode.** The jobs run in-process and reconciliation takes no
+  lock (backlog item 18). A second instance runs it twice.
+- **`HOST: "127.0.0.1"`.** Without it the API listens on every interface, and ufw is off
+  on that shared host.
 
 ---
 

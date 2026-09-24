@@ -18,6 +18,8 @@ export default tseslint.config(
       // Linting the flat config with type-aware rules requires putting it in the
       // tsconfig project, where it does not belong. It is 30 lines of configuration.
       "eslint.config.mjs",
+      // PM2's process file: CommonJS, loaded by PM2, never part of the build.
+      "ecosystem.config.cjs",
     ],
   },
   eslint.configs.recommended,
