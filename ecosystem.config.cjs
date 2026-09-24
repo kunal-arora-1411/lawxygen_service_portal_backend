@@ -6,12 +6,21 @@
 //
 // `.cjs` because package.json declares `"type": "module"` and PM2 loads this with require.
 
+const { existsSync } = require("node:fs");
+
+// The host is shared, and its system Node is older than this project needs — but another
+// PM2 app runs on it, so it is not ours to upgrade. bootstrap.sh installs a private Node
+// here instead. Resolved by path rather than PATH so that a `pm2 start` from any shell
+// gets the same runtime.
+const PRIVATE_NODE = "/opt/lawxygen/node/bin/node";
+
 module.exports = {
   apps: [
     {
       name: "lawxygen-api",
       cwd: __dirname,
       script: "dist/server.js",
+      interpreter: existsSync(PRIVATE_NODE) ? PRIVATE_NODE : "node",
 
       // Node's own loader reads the file, rather than PM2's `env_file` or a shell
       // `source`: a value like `MAIL_FROM=Lawxygen <no-reply@lawxygen.in>` is a syntax

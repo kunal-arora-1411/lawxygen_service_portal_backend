@@ -28,6 +28,12 @@ log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 fail() { printf '\n\033[1;31mFAILED:\033[0m %s\n' "$*" >&2; exit 1; }
 
 main() {
+  # The private Node from bootstrap.sh, when the host's own is too old. First on PATH so
+  # npm, npx and tsc below all run under it; ecosystem.config.cjs pins the API to it too.
+  if [[ -x /opt/lawxygen/node/bin/node ]]; then
+    export PATH="/opt/lawxygen/node/bin:${PATH}"
+  fi
+
   [[ -f ecosystem.config.cjs ]] || fail "Run this from the repository root."
   [[ -f "$ENV_FILE" ]] || fail "${ENV_FILE} is missing. Copy .env.production.example and fill it in."
   command -v pm2 >/dev/null 2>&1 || fail "pm2 is not installed. Run deploy/bootstrap.sh first."

@@ -73,8 +73,12 @@ around not disturbing the first tenant:
   and switching a firewall on underneath a working service is how an unrelated site goes
   dark. Enable deliberately with `ENABLE_UFW=1 sudo -E bash deploy/bootstrap.sh`.
 - The stock `sites-enabled/default` is only removed if it really is the stock file.
-- `bootstrap.sh` installs Node 24 only if there is no Node at all. If an older one is
-  present it **stops rather than upgrading it**, since something else may depend on it.
+- **The system Node is v20, and the other tenant's PM2 app runs on it.** It is never
+  upgraded. `bootstrap.sh` puts a private Node 24 in `/opt/lawxygen/node` instead;
+  `deploy.sh` puts it first on `PATH` and `ecosystem.config.cjs` pins the API to it.
+- **PM2 is shared.** Both apps live in `ubuntu`'s one PM2 daemon and boot unit. Only ever
+  address ours by name — `pm2 restart lawxygen-api`, never `pm2 restart all`,
+  `pm2 kill` or `pm2 update`.
 - The API binds to `127.0.0.1:4000`, so it is not reachable from outside whether or not
   ufw is ever enabled. Check nothing else on the host already holds port 4000
   (`ss -tlnp | grep :4000`) before the first deploy.
@@ -84,7 +88,9 @@ around not disturbing the first tenant:
 Disk is the thing to watch: 68% used, with roughly 6GB of Docker build cache belonging
 to the other project. `docker builder prune` would reclaim it, but that cache is not ours.
 Our footprint is the repository, its `node_modules` (dev dependencies included — see
-below) and PM2's logs, which `pm2-logrotate` caps at 5 × 10MB.
+below) and PM2's logs, which `/etc/logrotate.d/lawxygen-api` caps at 7 × 10MB. That is
+system logrotate, not the `pm2-logrotate` module, because the module would rotate the
+other tenant's PM2 logs too.
 
 ### 3. Neon
 
@@ -122,7 +128,7 @@ sudo bash deploy/bootstrap.sh
 ```
 
 That installs Node 24, PM2 (registered with systemd so it survives a reboot) and
-`pm2-logrotate`, plus nginx, certbot and ufw rules for 22/80/443. It installs the nginx
+log rotation for this app only, plus nginx, certbot and ufw rules for 22/80/443. It installs the nginx
 site and removes the default one. It does not request a certificate — that comes next,
 by hand, so a DNS mistake fails visibly.
 
